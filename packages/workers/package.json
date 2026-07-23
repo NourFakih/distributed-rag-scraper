@@ -1,0 +1,24 @@
+{
+  "name": "@distributed-rag/workers",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "dev": "tsx watch index.ts"
+  },
+  "dependencies": {
+    "@distributed-rag/shared": "*",
+    "@prisma/client": "6.19.3",
+    "axios": "1.18.1",
+    "bullmq": "5.81.0",
+    "cheerio": "1.2.0",
+    "dotenv": "17.2.3",
+    "ioredis": "5.11.1"
+  },
+  "devDependencies": {
+    "tsx": "4.22.3",
+    "typescript": "5.9.3"
+  }
+}

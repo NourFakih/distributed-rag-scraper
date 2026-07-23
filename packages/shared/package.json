@@ -1,0 +1,23 @@
+{
+  "name": "@distributed-rag/shared",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "bullmq": "5.81.0",
+    "ioredis": "5.11.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

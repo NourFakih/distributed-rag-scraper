@@ -1,0 +1,38 @@
+{
+  "name": "distributed-rag-scraper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Distributed static crawl vertical slice for the RAG scraper assignment",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
+  "packageManager": "npm@11.13.0",
+  "scripts": {
+    "build": "turbo run build",
+    "clean": "turbo run clean",
+    "dev": "turbo run dev",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "@types/node": "24.10.1",
+    "eslint": "9.39.2",
+    "globals": "16.5.0",
+    "prisma": "6.19.3",
+    "turbo": "2.8.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.52.0",
+    "vitest": "2.1.9"
+  }
+}
+

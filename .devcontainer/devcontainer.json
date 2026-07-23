@@ -1,0 +1,22 @@
+{
+  "name": "Distributed RAG Scraper",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:24-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "dockerDashComposeVersion": "v2"
+    }
+  },
+  "postCreateCommand": "bash -lc 'if [ ! -f .env ]; then cp .env.example .env; fi && npm ci && npm run prisma:generate'",
+  "forwardPorts": [
+    3000
+  ],
+  "portsAttributes": {
+    "3000": {
+      "label": "Express API",
+      "onAutoForward": "notify"
+    }
+  },
+  "remoteUser": "node"
+}
+

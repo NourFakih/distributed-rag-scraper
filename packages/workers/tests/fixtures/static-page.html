@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Deterministic&nbsp;Crawl Fixture</title>
+    <style>
+      .hidden { display: none; }
+    </style>
+    <script>
+      window.fixtureNoise = "must not be indexed";
+    </script>
+  </head>
+  <body>
+    <header>
+      <p>Site-wide header</p>
+      <nav><a href="/ignored">Ignored navigation</a></nav>
+    </header>
+    <main>
+      <h1>Building a Reliable Static Pipeline</h1>
+      <p>
+        A deterministic fixture makes scraper tests repeatable and safe.
+      </p>
+      <section>
+        <h2>Normalization</h2>
+        <p>
+          Meaningful blocks stay on separate lines, while extra
+          whitespace collapses.
+        </p>
+      </section>
+      <ul>
+        <li>Fetch one page.</li>
+        <li>Clean, hash, and persist it.</li>
+      </ul>
+      <aside>This boilerplate must disappear.</aside>
+    </main>
+    <footer>Site-wide footer</footer>
+  </body>
+</html>
+

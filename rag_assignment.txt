@@ -1,0 +1,111 @@
+Distributed RAG-Based Web Scraper Framework 
+Overview 
+Design and implement a distributed, fault-tolerant web scraping framework augmented with 
+Retrieval-Augmented Generation (RAG). The system must extract data from multiple websites 
+at scale, process and index it, and expose it through an API that can answer natural-language 
+queries grounded in the scraped content with cited sources. 
+This is a systems-design assignment as much as a coding assignment. You are free to choose 
+your own language, frameworks, databases, and infrastructure — what matters is that your 
+architecture is genuinely distributed, resilient to failure, and that your design decisions are 
+justified in your report. Any tools named below are examples only, not requirements. 
+Project Requirements - - - - - 
+Work individually. 
+Test the framework on at least three different websites, including: - 
+one site with mostly static HTML, - - 
+one site that relies on JavaScript rendering for its content, 
+one site with pagination, infinite scroll, or a large number of pages (500+ pages 
+of content, or the practical equivalent). 
+Respect each site's robots.txt and terms of service. Document your compliance 
+approach in the report. 
+Deliver all files created/used/included in the project (source code, configs, sample data). 
+Submit a detailed report containing: - 
+A video recording covering each phase of the project, narrating the steps taken 
+and the reasoning behind key decisions. - 
+An architecture diagram and a flowchart illustrating each phase of the 
+framework's workflow. 
+Objectives - - - - 
+Implement a genuinely scalable and distributed web scraper (multiple independent 
+worker instances, not just multiple processes on one machine). 
+Integrate a RAG-based system to enhance and retrieve scraped data, with measurable 
+retrieval quality. 
+Ensure fault tolerance and graceful recovery from worker/node failure. 
+Use a distributed computing/queuing model for efficient task execution and dynamic 
+scaling. 
+- 
+Provide APIs for data retrieval and analysis, including a grounded question-answering 
+endpoint with source citations. - 
+Justify all technology and architecture choices against realistic alternatives. 
+Tasks 
+1. Environment Setup - 
+Choose a language/runtime appropriate to the task (e.g., TypeScript/Node.js, Python, 
+Go, Rust). Briefly justify the choice in your report. - - - 
+Set up version control (GitHub/GitLab) with a clear commit history. 
+Set up a CI pipeline (e.g., GitHub Actions, GitLab CI) that runs linting and tests 
+automatically on each push. 
+Containerize each component of your system (e.g., with Docker) so it can be deployed 
+as independent, replicable units. 
+2. Web Scraping Module - 
+Build a crawler capable of handling both static HTML and JavaScript-rendered pages 
+(e.g., using Playwright, Puppeteer, Selenium, or Scrapy with a rendering layer). - - - - - - - 
+Parse extracted HTML with a parsing library of your choice (e.g., Cheerio, 
+BeautifulSoup, lxml). 
+Respect crawl politeness: honor robots.txt, apply per-domain rate limiting, and 
+implement exponential backoff on errors or throttling responses. 
+Deduplicate content (e.g., via content hashing) and support incremental re-crawls that 
+only re-fetch pages that have changed. 
+Distribute scraping tasks across multiple independent worker instances (e.g., 
+separate containers, processes, or machines) using a message/job queue of your choice 
+(e.g., BullMQ, Celery, RabbitMQ, Kafka, Redis Queue). 
+Demonstrate horizontal scaling: show the system handling an increased crawl load 
+faster when additional workers are added. 
+Store raw extracted data in a database of your choice (e.g., MongoDB, PostgreSQL). 
+Handle realistic failure scenarios — worker crash mid-task, network timeout, temporary 
+IP block — with retries, backoff, and a dead-letter mechanism for tasks that repeatedly 
+fail. 
+3. Data Processing Module - 
+Strip unnecessary markup, scripts, and boilerplate from raw content. - - 
+Normalize data into a structured format (e.g., JSON, relational schema) with schema 
+validation. 
+Handle more than one content type where present (e.g., body text, tables, linked 
+documents), not just plain paragraphs. 
+- 
+Store cleaned data with basic versioning, so repeated crawls of the same page retain a 
+history of changes rather than overwriting silently. 
+4. RAG-Based AI Processing - 
+Implement a deliberate chunking strategy (e.g., semantic or overlap-based chunking) 
+rather than naive fixed-length splitting, and explain the trade-offs of your choice. - - - - 
+Store indexed text representations in a vector database of your choice (e.g., Pinecone, 
+Weaviate, Qdrant, Chroma, pgvector, FAISS). 
+Connect an LLM of your choice (e.g., OpenAI, Anthropic Claude, a local model via 
+Ollama, or another framework) to generate contextual summaries and answers. 
+Implement a retrieval function that fetches the most relevant content from the vector 
+database for a given query. 
+Support queries that require synthesizing information from more than one scraped 
+source in a single answer. 
+5. API for Data Access - 
+Build an API service using a framework of your choice (e.g., Express, Fastify, NestJS, 
+FastAPI, Flask, Django REST, Gin). - 
+Implement endpoints for: - 
+fetching raw scraped data, - - - 
+6. Web UI - 
+querying processed/enhanced content, 
+searching indexed data (keyword and semantic), 
+a RAG question-answering endpoint that returns a generated answer with 
+citations back to the specific source URLs used. 
+Build a basic interface using a framework of your choice (e.g., React, Vue, Svelte). - - 
+Connect the UI to the backend API for real-time data access. 
+Implement search functionality against your indexed data. 
+Evaluation & Documentation Requirements 
+Your report should also include: - - - 
+A short justification of each major technology choice, including at least one alternative 
+you considered and why you didn't choose it. 
+An architecture diagram and sequence diagram(s) for the key flows (e.g., "a URL enters 
+the queue → gets scraped → gets processed → gets indexed → gets queried"). 
+A short ethics/compliance note: how you respected robots.txt and each site's terms 
+of service for the sites you scraped. 
+Deliverables Summary - - - - 
+Full source code (scraper, processing module, RAG integration, API, UI). 
+Video recording walking through each phase of the project and the reasoning behind key 
+decisions. 
+Architecture diagram and flowchart of the system's workflow. 
+Written report describing the work, technology justifications, and compliance notes. 

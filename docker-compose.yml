@@ -1,0 +1,99 @@
+name: distributed-rag-scraper
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: distributed_rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d distributed_rag
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - redis-data:/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/distributed_rag?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+      target: runtime
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/distributed_rag?schema=public
+      REDIS_URL: redis://redis:6379
+      CRAWLER_USER_AGENT: ${CRAWLER_USER_AGENT:-DistributedRagScraper/0.1 (+https://github.com/NourFakih/distributed-rag-scraper)}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: packages/workers/Dockerfile
+      target: runtime
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/distributed_rag?schema=public
+      REDIS_URL: redis://redis:6379
+      WORKER_CONCURRENCY: 5
+      CRAWLER_USER_AGENT: ${CRAWLER_USER_AGENT:-DistributedRagScraper/0.1 (+https://github.com/NourFakih/distributed-rag-scraper)}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+

@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CrawlStatus {
+  QUEUED
+  PROCESSING
+  RETRYING
+  COMPLETED
+  FAILED
+}
+
+model Crawl {
+  id           String      @id @default(uuid()) @db.Uuid
+  url          String      @db.VarChar(2048)
+  status       CrawlStatus @default(QUEUED)
+  attempts     Int         @default(0)
+  errorMessage String?     @map("error_message") @db.Text
+  startedAt    DateTime?   @map("started_at")
+  completedAt  DateTime?   @map("completed_at")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+  document     Document?
+
+  @@index([status])
+  @@map("crawls")
+}
+
+model Document {
+  id          String   @id @default(uuid()) @db.Uuid
+  crawlId     String   @unique @map("crawl_id") @db.Uuid
+  url         String   @db.VarChar(2048)
+  title       String?  @db.Text
+  rawHtml     String   @map("raw_html") @db.Text
+  content     String   @db.Text
+  contentHash String   @map("content_hash") @db.Char(64)
+  httpStatus  Int      @map("http_status")
+  contentType String?  @map("content_type") @db.VarChar(255)
+  fetchedAt   DateTime @default(now()) @map("fetched_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  crawl       Crawl    @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+
+  @@index([contentHash])
+  @@map("documents")
+}
+
