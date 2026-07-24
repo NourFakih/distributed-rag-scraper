@@ -26,8 +26,7 @@ export function getCrawlQueue(): CrawlQueue {
         defaultJobOptions: {
           attempts: 3,
           backoff: {
-            type: "exponential",
-            delay: 1_000,
+            type: "crawler",
           },
           removeOnComplete: {
             age: 24 * 60 * 60,

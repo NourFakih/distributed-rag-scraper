@@ -4,10 +4,19 @@ export {
   crawlJobDataSchema,
 } from "./contracts/crawl";
 export type {
+  CompletedCrawlJobResult,
   CrawlJobData,
   CrawlJobName,
   CrawlJobResult,
+  RobotsSkippedCrawlJobResult,
 } from "./contracts/crawl";
+export {
+  DEFAULT_CRAWLER_USER_AGENT,
+  DEFAULT_DOMAIN_INTERVAL_MS,
+  loadCrawlerConfig,
+  MAX_ROBOTS_CACHE_TTL_SECONDS,
+} from "./config/crawler";
+export type { CrawlerConfig } from "./config/crawler";
 export { closePrisma, prisma } from "./db/prisma";
 export { closeCrawlQueue, getCrawlQueue } from "./queue/crawl.queue";
 export { createRedisConnection } from "./queue/redis";

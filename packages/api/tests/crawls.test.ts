@@ -80,6 +80,7 @@ function rootPage() {
     status: CrawlPageStatus.QUEUED,
     attempts: 0,
     error: null,
+    failureCategory: null,
     createdAt,
     startedAt: null,
     completedAt: null,

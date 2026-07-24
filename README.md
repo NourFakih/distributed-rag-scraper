@@ -1,24 +1,27 @@
 # Distributed RAG Scraper
 
-This repository contains the bounded same-origin static-crawling slice of the
-distributed RAG scraper assignment:
+This repository contains the bounded, polite, fault-tolerant static-crawling
+slice of the distributed RAG scraper assignment:
 
 ```text
 POST /api/crawls
   -> PostgreSQL Crawl + root CrawlPage
   -> Redis/BullMQ CrawlPage job
   -> independent worker
+  -> cached robots.txt policy
+  -> global Redis request-start limiter
+  -> DNS/IP and redirect validation
   -> Axios + Cheerio static-page extraction
   -> same-origin link discovery
   -> bounded child CrawlPage jobs
   -> normalized content + SHA-256
   -> one PostgreSQL Document per CrawlPage
-  -> aggregate crawl/page/document APIs
+  -> aggregate crawl/page/document/dead-letter APIs
 ```
 
-Each run defaults to at most 25 pages and depth 2. React, Playwright, robots.txt
-enforcement, pgvector, embeddings, RAG, performance experiments, and the
-500-page crawl are later phases.
+Each run defaults to at most 25 pages and depth 2. React, Playwright, pgvector,
+embeddings, RAG, performance experiments, and the 500-page crawl remain later
+phases.
 
 ## Stack
 
@@ -87,12 +90,16 @@ npm test
 The real PostgreSQL/Redis pipeline test is enabled when its service URLs exist:
 
 ```bash
-RUN_INTEGRATION_TESTS=true npm test
+NODE_ENV=test \
+CRAWLER_ALLOW_PRIVATE_TEST_TARGETS=true \
+RUN_INTEGRATION_TESTS=true \
+npm test
 ```
 
 GitHub Actions supplies deterministic PostgreSQL and Redis service containers.
-The scraper tests never access an external website: they use the committed
-fixture at `packages/workers/tests/fixtures/static-page.html`.
+The test-only private-target switch is rejected outside `NODE_ENV=test`.
+Crawler tests never access a public website: they use committed or local HTTP
+fixtures.
 
 ## API contract
 
@@ -127,6 +134,18 @@ Returns CrawlPage metadata without raw HTML. `page` defaults to 1 and `pageSize`
 defaults to 25 with a maximum of 100. Each result includes depth, parent,
 status, attempts, bounded error, timestamps, and optional `documentId`.
 
+### `GET /api/crawls/:id/dead-letters`
+
+Returns terminal technical failures for one Crawl with the original bounded job
+payload, failure category, bounded error message, attempt count, and failure
+time. It uses the same `page` and `pageSize` pagination as the page list.
+Robots exclusions do not create dead letters.
+
+### `GET /api/dead-letters/:id`
+
+Returns one inspectable dead letter. Replay is intentionally not part of this
+stage.
+
 ### `GET /api/documents/:id`
 
 Returns the owning Crawl/CrawlPage IDs, source URL, title, raw HTML, normalized
@@ -137,31 +156,51 @@ content, lowercase SHA-256, HTTP metadata, and timestamps. Invalid UUIDs return
 
 - The API and worker are separate deployable processes and containers.
 - Each job operates on a CrawlPage UUID and uses that UUID as `jobId`.
-- A job gets three attempts with exponential backoff starting at one second.
+- A job gets three attempts. Retryable HTTP, network, rate-limiter, and robots
+  failures honor a valid `Retry-After` value, then use bounded exponential
+  backoff.
 - Page state changes through `DISCOVERED`, `QUEUED`, `PROCESSING`, optionally
-  `RETRYING`, and then a terminal state.
+  `RETRYING`, and then a terminal state. Robots exclusions use
+  `SKIPPED_ROBOTS`.
 - A unique `crawlPageId` on Document plus an upsert makes redelivery idempotent.
+- A unique `crawlPageId` on DeadLetter plus an upsert makes terminal-failure
+  redelivery idempotent.
 - The unique `(crawlId, normalizedUrl)` database key prevents duplicate pages.
 - Discovery locks the Crawl row while checking remaining capacity, so
   concurrent workers cannot exceed `maxPages`.
 - The aggregate Crawl becomes `COMPLETED` only after no page remains active,
-  and its counters preserve child failures.
+  and its counters distinguish policy skips from technical failures.
 - Terminally failed BullMQ jobs remain inspectable.
 
-Static fetching has a 15-second timeout, five-redirect limit, 2 MiB limit, and
-requires a successful HTML/XHTML response. Cleaning removes executable,
-navigation, page-chrome, and embedded-media elements; it prefers `main`, then
-`article`, then `body`. Link extraction uses the raw HTML and final response URL,
-honors valid same-origin `<base>` values and `nofollow`, and excludes external,
+Before each page fetch, workers share a per-origin robots policy cached in Redis
+for at most 24 hours. A 2xx robots response is enforced, 4xx means allow, and
+5xx/network failures fail closed and retry. The configured user agent is used
+for both robots matching and page requests. Robots `Crawl-delay` can only
+increase the global delay.
+
+The global Redis limiter atomically spaces request starts by hostname and
+effective port across all workers. `CRAWLER_DEFAULT_INTERVAL_MS` defaults to
+1000 and must be an integer from 1 through 60000. Robots fetches, page fetches,
+and every redirect hop use the limiter.
+
+Static fetching has a 15-second timeout, a five-redirect limit, and a 2 MiB
+limit, and requires a successful HTML/XHTML response. Redirects are manual:
+every hop remains on the exact seed origin, passes DNS/IP validation, observes
+robots policy, and is rate-limited. Cleaning removes executable, navigation,
+page-chrome, and embedded-media elements; it prefers `main`, then `article`,
+then `body`. Link extraction uses the raw HTML and final response URL, honors
+valid same-origin `<base>` values and `nofollow`, and excludes external,
 non-HTTP, malformed, empty, duplicate, and downloadable links.
 
 ## Security boundary
 
-This first slice is for a private Codespaces demonstration. URL validation does
-not yet include DNS resolution, redirect-by-redirect address checks, or private
-network blocking, so the API must not be publicly exposed. Complete SSRF
-protection, robots.txt enforcement, Redis-backed per-domain throttling, and
-terms-of-service adapters belong to the compliance/crawler phase.
+This remains a private Codespaces demonstration rather than a public crawling
+service. The worker resolves DNS before each hop, rejects private, loopback,
+link-local, multicast, documentation, and other non-public targets, pins the
+validated addresses into the request, disables proxy discovery, and repeats the
+checks after redirects. These controls materially reduce SSRF risk but do not
+replace authentication, authorization, deployment isolation, abuse controls,
+or a production security review.
 
 ## Repository layout
 

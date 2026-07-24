@@ -10,6 +10,8 @@ import { Worker } from "bullmq";
 import type IORedis from "ioredis";
 
 import { processCrawlJob } from "./jobs/crawl.job";
+import { calculateBackoffDelay } from "./retry/retry-policy";
+import { closeCrawlerServices } from "./runtime/crawler-services";
 
 export interface CrawlWorkerRuntime {
   worker: Worker<CrawlJobData, CrawlJobResult, CrawlJobName>;
@@ -25,13 +27,25 @@ export function createCrawlWorker(): CrawlWorkerRuntime {
     {
       connection,
       concurrency: Number.parseInt(process.env.WORKER_CONCURRENCY ?? "5", 10),
+      settings: {
+        backoffStrategy: (attemptsMade, type, error) => {
+          if (type !== "crawler") {
+            throw new Error(`Unknown backoff strategy: ${type ?? "missing"}`);
+          }
+          return calculateBackoffDelay(attemptsMade, error);
+        },
+      },
     },
   );
 
   worker.on("completed", (job, result) => {
-    console.log(
-      `Completed CrawlPage ${result.crawlPageId} as document ${result.documentId}`,
-    );
+    if (result.outcome === "COMPLETED") {
+      console.log(
+        `Completed CrawlPage ${result.crawlPageId} as document ${result.documentId}`,
+      );
+      return;
+    }
+    console.log(`Skipped CrawlPage ${result.crawlPageId} due to robots.txt`);
   });
 
   worker.on("failed", (job, error) => {
@@ -48,7 +62,7 @@ export function createCrawlWorker(): CrawlWorkerRuntime {
     connection,
     close: async () => {
       await worker.close();
-      await closeCrawlQueue();
+      await Promise.all([closeCrawlQueue(), closeCrawlerServices()]);
       if (connection.status !== "end") {
         await connection.quit();
       }

@@ -9,10 +9,20 @@ export const crawlJobDataSchema = z.object({
 
 export type CrawlJobData = z.infer<typeof crawlJobDataSchema>;
 
-export interface CrawlJobResult {
+export interface CompletedCrawlJobResult {
   crawlPageId: string;
+  outcome: "COMPLETED";
   documentId: string;
   contentHash: string;
 }
+
+export interface RobotsSkippedCrawlJobResult {
+  crawlPageId: string;
+  outcome: "SKIPPED_ROBOTS";
+}
+
+export type CrawlJobResult =
+  | CompletedCrawlJobResult
+  | RobotsSkippedCrawlJobResult;
 
 export type CrawlJobName = typeof SCRAPE_STATIC_PAGE_JOB;

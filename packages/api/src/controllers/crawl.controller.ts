@@ -57,6 +57,7 @@ export async function getCrawlController(
       },
       attempts: rootPage?.attempts ?? 0,
       errorMessage: rootPage?.error ?? null,
+      failureCategory: rootPage?.failureCategory ?? null,
       documentId: rootPage?.document?.id ?? null,
       rootPage: rootPage
         ? {
@@ -64,6 +65,7 @@ export async function getCrawlController(
             url: rootPage.url,
             normalizedUrl: rootPage.normalizedUrl,
             status: rootPage.status,
+            failureCategory: rootPage.failureCategory,
             documentId: rootPage.document?.id ?? null,
           }
         : null,
@@ -95,6 +97,7 @@ export async function getCrawlPagesController(
       status: crawlPage.status,
       attempts: crawlPage.attempts,
       error: crawlPage.error,
+      failureCategory: crawlPage.failureCategory,
       documentId: crawlPage.document?.id ?? null,
       createdAt: crawlPage.createdAt,
       startedAt: crawlPage.startedAt,

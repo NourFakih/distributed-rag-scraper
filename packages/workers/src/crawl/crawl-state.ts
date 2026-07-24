@@ -65,7 +65,9 @@ export async function refreshCrawlState(crawlId: string): Promise<void> {
             0,
           ),
           completedCount: count(CrawlPageStatus.COMPLETED),
-          skippedCount: count(CrawlPageStatus.SKIPPED),
+          skippedCount:
+            count(CrawlPageStatus.SKIPPED) +
+            count(CrawlPageStatus.SKIPPED_ROBOTS),
           failedCount: count(CrawlPageStatus.FAILED),
           completedAt: terminal ? (crawl.completedAt ?? new Date()) : null,
         },

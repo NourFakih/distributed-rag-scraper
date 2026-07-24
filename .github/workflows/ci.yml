@@ -36,6 +36,8 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/distributed_rag_test?schema=public
       REDIS_URL: redis://localhost:6379
       RUN_INTEGRATION_TESTS: "true"
+      CRAWLER_DEFAULT_INTERVAL_MS: "10"
+      CRAWLER_ALLOW_PRIVATE_TEST_TARGETS: "true"
       NODE_ENV: test
     steps:
       - name: Check out repository

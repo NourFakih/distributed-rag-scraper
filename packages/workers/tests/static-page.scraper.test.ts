@@ -1,6 +1,9 @@
-import type { AxiosInstance, AxiosResponse } from "axios";
 import { describe, expect, it, vi } from "vitest";
 
+import type {
+  CrawlerHttpClient,
+  CrawlerHttpResponse,
+} from "../src/http/crawler-http-client";
 import {
   MAX_STATIC_PAGE_BYTES,
   scrapeStaticPage,
@@ -13,10 +16,11 @@ import {
 
 
 function clientReturning(
-  response: Partial<AxiosResponse<string>>,
-): AxiosInstance {
+  response: Partial<CrawlerHttpResponse>,
+): CrawlerHttpClient {
   return {
-    get: vi.fn().mockResolvedValue({
+    request: vi.fn().mockResolvedValue({
+      url: "https://fixture.test/page",
       data: FIXTURE_HTML,
       status: 200,
       headers: {
@@ -24,13 +28,14 @@ function clientReturning(
       },
       ...response,
     }),
-  } as unknown as AxiosInstance;
+  } as unknown as CrawlerHttpClient;
 }
 
 describe("scrapeStaticPage", () => {
   it("returns raw HTML, HTTP metadata, and normalized content", async () => {
     const result = await scrapeStaticPage(
       "https://fixture.test/page",
+      "https://fixture.test",
       clientReturning({}),
     );
 
@@ -46,6 +51,7 @@ describe("scrapeStaticPage", () => {
     await expect(
       scrapeStaticPage(
         "https://fixture.test/data.json",
+        "https://fixture.test",
         clientReturning({
           headers: {
             "content-type": "application/json",
@@ -59,6 +65,7 @@ describe("scrapeStaticPage", () => {
     await expect(
       scrapeStaticPage(
         "https://fixture.test/large",
+        "https://fixture.test",
         clientReturning({
           data: `<main>${"x".repeat(MAX_STATIC_PAGE_BYTES + 1)}</main>`,
         }),
@@ -70,6 +77,7 @@ describe("scrapeStaticPage", () => {
     await expect(
       scrapeStaticPage(
         "https://fixture.test/empty",
+        "https://fixture.test",
         clientReturning({
           data: "<html><body><script>noise</script></body></html>",
         }),
@@ -79,11 +87,17 @@ describe("scrapeStaticPage", () => {
 
   it("propagates HTTP and timeout errors from Axios", async () => {
     const client = {
-      get: vi.fn().mockRejectedValue(new Error("timeout of 15000ms exceeded")),
-    } as unknown as AxiosInstance;
+      request: vi
+        .fn()
+        .mockRejectedValue(new Error("timeout of 15000ms exceeded")),
+    } as unknown as CrawlerHttpClient;
 
     await expect(
-      scrapeStaticPage("https://fixture.test/timeout", client),
+      scrapeStaticPage(
+        "https://fixture.test/timeout",
+        "https://fixture.test",
+        client,
+      ),
     ).rejects.toThrow("timeout of 15000ms exceeded");
   });
 });

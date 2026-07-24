@@ -60,6 +60,28 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
 
   beforeAll(async () => {
     fixtureServer = createServer((requestMessage, response) => {
+      if (requestMessage.url === "/robots.txt") {
+        response.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+        });
+        response.end(
+          [
+            "User-agent: *",
+            "Disallow: /robots-blocked",
+            "Allow: /",
+          ].join("\n"),
+        );
+        return;
+      }
+
+      if (requestMessage.url === "/retryable") {
+        response.writeHead(503, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end("<html><body><main>Try later</main></body></html>");
+        return;
+      }
+
       if (requestMessage.url === "/non-html") {
         response.writeHead(200, {
           "content-type": "application/json",
@@ -121,6 +143,7 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
     fixtureBaseUrl = `http://127.0.0.1:${address.port}`;
 
     await prisma.$connect();
+    await prisma.deadLetter.deleteMany();
     await prisma.document.deleteMany();
     await prisma.crawl.deleteMany();
     await getCrawlQueue().obliterate({ force: true });
@@ -193,17 +216,17 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
     ).resolves.toBe(1);
   });
 
-  it("reports terminal page failures while completing the aggregate Crawl", async () => {
+  it("persists and exposes one dead letter after retry exhaustion", async () => {
     const created = await request(app)
       .post("/api/crawls")
-      .send({ url: `${fixtureBaseUrl}/non-html` });
+      .send({ url: `${fixtureBaseUrl}/retryable` });
     const crawlId = String(created.body.data.id);
 
     const failed = await waitForStatus(app, crawlId, ["COMPLETED"]);
 
     expect(failed.data.status).toBe("COMPLETED");
     expect(failed.data.attempts).toBe(3);
-    expect(failed.data.errorMessage).toContain("Unsupported content type");
+    expect(failed.data.errorMessage).toContain("HTTP 503");
     expect(failed.data.completedWithFailures).toBe(true);
     expect(failed.data.counters).toMatchObject({
       failed: 1,
@@ -215,6 +238,99 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
     const job = await getCrawlQueue().getJob(rootPageId);
     expect(job?.name).toBe(SCRAPE_STATIC_PAGE_JOB);
     expect(await job?.getState()).toBe("failed");
+
+    const deadLetters = await request(app).get(
+      `/api/crawls/${crawlId}/dead-letters?page=1&pageSize=25`,
+    );
+    expect(deadLetters.status).toBe(200);
+    expect(deadLetters.body.pagination.total).toBe(1);
+    expect(deadLetters.body.data[0]).toMatchObject({
+      crawlId,
+      crawlPageId: rootPageId,
+      jobId: rootPageId,
+      url: `${fixtureBaseUrl}/retryable`,
+      jobPayload: {
+        crawlPageId: rootPageId,
+      },
+      failureCategory: "HTTP_503",
+      attemptCount: 3,
+    });
+
+    const deadLetterId = String(deadLetters.body.data[0].id);
+    const deadLetter = await request(app).get(
+      `/api/dead-letters/${deadLetterId}`,
+    );
+    expect(deadLetter.status).toBe(200);
+    expect(deadLetter.body.data.failureCategory).toBe("HTTP_503");
+
+    await expect(
+      processCrawlJob({
+        id: rootPageId,
+        data: {
+          crawlPageId: rootPageId,
+        },
+        attemptsMade: 2,
+        opts: {
+          attempts: 3,
+        },
+      } as unknown as Job<CrawlJobData, CrawlJobResult, CrawlJobName>),
+    ).rejects.toMatchObject({
+      name: "UnrecoverableError",
+    });
+    await expect(
+      prisma.deadLetter.count({
+        where: {
+          crawlPageId: rootPageId,
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it("records robots exclusions as skips without technical failures", async () => {
+    const created = await request(app)
+      .post("/api/crawls")
+      .send({ url: `${fixtureBaseUrl}/robots-blocked`, maxDepth: 0 });
+    const crawlId = String(created.body.data.id);
+
+    const completed = await waitForStatus(app, crawlId, ["COMPLETED"]);
+    expect(completed.data.completedWithFailures).toBe(false);
+    expect(completed.data.counters).toEqual({
+      discovered: 1,
+      completed: 0,
+      skipped: 1,
+      failed: 0,
+    });
+    expect(
+      (completed.data.rootPage as Record<string, unknown>).status,
+    ).toBe("SKIPPED_ROBOTS");
+    await expect(
+      prisma.deadLetter.count({
+        where: {
+          crawlId,
+        },
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("treats unsupported content as permanent without retrying", async () => {
+    const created = await request(app)
+      .post("/api/crawls")
+      .send({ url: `${fixtureBaseUrl}/non-html`, maxDepth: 0 });
+    const crawlId = String(created.body.data.id);
+
+    const failed = await waitForStatus(app, crawlId, ["COMPLETED"]);
+    expect(failed.data.attempts).toBe(1);
+    expect(failed.data.completedWithFailures).toBe(true);
+    expect(failed.data.errorMessage).toContain("Unsupported content type");
+
+    const deadLetters = await request(app).get(
+      `/api/crawls/${crawlId}/dead-letters`,
+    );
+    expect(deadLetters.body.pagination.total).toBe(1);
+    expect(deadLetters.body.data[0]).toMatchObject({
+      failureCategory: "UNSUPPORTED_CONTENT_TYPE",
+      attemptCount: 1,
+    });
   });
 
   it("completes a deterministic multi-page fixture graph", async () => {

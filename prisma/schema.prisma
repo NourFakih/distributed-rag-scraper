@@ -22,6 +22,7 @@ enum CrawlPageStatus {
   RETRYING
   COMPLETED
   SKIPPED
+  SKIPPED_ROBOTS
   FAILED
 }
 
@@ -40,33 +41,54 @@ model Crawl {
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")
   pages            CrawlPage[]
+  deadLetters      DeadLetter[]
 
   @@index([status])
   @@map("crawls")
 }
 
 model CrawlPage {
-  id            String          @id @default(uuid()) @db.Uuid
-  crawlId       String          @map("crawl_id") @db.Uuid
-  url           String          @db.VarChar(2048)
-  normalizedUrl String          @map("normalized_url") @db.VarChar(2048)
-  depth         Int
-  parentPageId  String?         @map("parent_page_id") @db.Uuid
-  status        CrawlPageStatus @default(DISCOVERED)
-  attempts      Int             @default(0)
-  error         String?         @db.Text
-  createdAt     DateTime        @default(now()) @map("created_at")
-  startedAt     DateTime?       @map("started_at")
-  completedAt   DateTime?       @map("completed_at")
-  crawl         Crawl           @relation(fields: [crawlId], references: [id], onDelete: Cascade)
-  parentPage    CrawlPage?      @relation("CrawlPageChildren", fields: [parentPageId], references: [id], onDelete: SetNull)
-  childPages    CrawlPage[]     @relation("CrawlPageChildren")
-  document      Document?
+  id              String          @id @default(uuid()) @db.Uuid
+  crawlId         String          @map("crawl_id") @db.Uuid
+  url             String          @db.VarChar(2048)
+  normalizedUrl   String          @map("normalized_url") @db.VarChar(2048)
+  depth           Int
+  parentPageId    String?         @map("parent_page_id") @db.Uuid
+  status          CrawlPageStatus @default(DISCOVERED)
+  attempts        Int             @default(0)
+  error           String?         @db.Text
+  failureCategory String?         @map("failure_category") @db.VarChar(64)
+  createdAt       DateTime        @default(now()) @map("created_at")
+  startedAt       DateTime?       @map("started_at")
+  completedAt     DateTime?       @map("completed_at")
+  crawl           Crawl           @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+  parentPage      CrawlPage?      @relation("CrawlPageChildren", fields: [parentPageId], references: [id], onDelete: SetNull)
+  childPages      CrawlPage[]     @relation("CrawlPageChildren")
+  document        Document?
+  deadLetter      DeadLetter?
 
   @@unique([crawlId, normalizedUrl])
   @@index([crawlId, status])
   @@index([parentPageId])
   @@map("crawl_pages")
+}
+
+model DeadLetter {
+  id              String    @id @default(uuid()) @db.Uuid
+  crawlId         String    @map("crawl_id") @db.Uuid
+  crawlPageId     String    @unique @map("crawl_page_id") @db.Uuid
+  jobId           String    @map("job_id") @db.VarChar(255)
+  url             String    @db.VarChar(2048)
+  jobPayload      String    @map("job_payload") @db.Text
+  failureCategory String    @map("failure_category") @db.VarChar(64)
+  errorMessage    String    @map("error_message") @db.Text
+  attemptCount    Int       @map("attempt_count")
+  failedAt        DateTime  @default(now()) @map("failed_at")
+  crawl           Crawl     @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+  crawlPage       CrawlPage @relation(fields: [crawlPageId], references: [id], onDelete: Cascade)
+
+  @@index([crawlId, failedAt])
+  @@map("dead_letters")
 }
 
 model Document {

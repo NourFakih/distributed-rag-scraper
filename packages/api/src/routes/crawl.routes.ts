@@ -5,6 +5,7 @@ import {
   getCrawlController,
   getCrawlPagesController,
 } from "../controllers/crawl.controller";
+import { getCrawlDeadLettersController } from "../controllers/dead-letter.controller";
 import { asyncHandler } from "../middleware/error-handler";
 import { validate } from "../middleware/validate";
 import {
@@ -19,6 +20,13 @@ crawlRouter.post(
   "/",
   validate(createCrawlBodySchema, "body"),
   asyncHandler(createCrawlController),
+);
+
+crawlRouter.get(
+  "/:id/dead-letters",
+  validate(idParamsSchema, "params"),
+  validate(crawlPagesQuerySchema, "query"),
+  asyncHandler(getCrawlDeadLettersController),
 );
 
 crawlRouter.get(

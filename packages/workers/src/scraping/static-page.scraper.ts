@@ -1,9 +1,15 @@
-import axios from "axios";
-import type { AxiosInstance } from "axios";
-
+import {
+  CrawlFailure,
+  type CrawlFailureCategory,
+} from "../errors/crawl-failure";
+import {
+  CRAWLER_HTTP_TIMEOUT_MS,
+  retryableHttpFailure,
+} from "../http/crawler-http-client";
+import type { CrawlerHttpClient } from "../http/crawler-http-client";
 import { cleanHtml } from "../processing/clean-html";
 
-export const STATIC_FETCH_TIMEOUT_MS = 15_000;
+export const STATIC_FETCH_TIMEOUT_MS = CRAWLER_HTTP_TIMEOUT_MS;
 export const MAX_STATIC_PAGE_BYTES = 2 * 1024 * 1024;
 
 export interface StaticPageResult {
@@ -16,63 +22,80 @@ export interface StaticPageResult {
   fetchedAt: Date;
 }
 
-export class StaticPageScrapeError extends Error {
-  public constructor(message: string) {
-    super(message);
+export class StaticPageScrapeError extends CrawlFailure {
+  public constructor(
+    category: CrawlFailureCategory,
+    message: string,
+  ) {
+    super(category, message, false);
     this.name = "StaticPageScrapeError";
   }
 }
 
 export async function scrapeStaticPage(
   url: string,
-  client: AxiosInstance = axios,
+  allowedOrigin: string,
+  client: CrawlerHttpClient,
+  crawlDelayMs?: number,
+  checkRedirectPolicy?: (
+    url: string,
+  ) => Promise<{ allowed: boolean; crawlDelayMs?: number }>,
 ): Promise<StaticPageResult> {
-  const response = await client.get<string>(url, {
-    timeout: STATIC_FETCH_TIMEOUT_MS,
-    maxRedirects: 5,
-    maxContentLength: MAX_STATIC_PAGE_BYTES,
-    maxBodyLength: MAX_STATIC_PAGE_BYTES,
-    responseType: "text",
-    transformResponse: [(value: string) => value],
-    validateStatus: (status) => status >= 200 && status < 300,
-    headers: {
-      Accept: "text/html,application/xhtml+xml",
-      "User-Agent":
-        process.env.CRAWLER_USER_AGENT ??
-        "DistributedRagScraper/0.1 (+https://github.com/NourFakih/distributed-rag-scraper)",
-    },
+  const response = await client.request({
+    url,
+    allowedOrigin,
+    accept: "text/html,application/xhtml+xml",
+    maxResponseBytes: MAX_STATIC_PAGE_BYTES,
+    crawlDelayMs,
+    checkRedirectPolicy,
   });
+  const retryableFailure = retryableHttpFailure(response);
+  if (retryableFailure) {
+    throw retryableFailure;
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new StaticPageScrapeError(
+      "HTTP_PERMANENT",
+      `Static page returned HTTP ${response.status}`,
+    );
+  }
 
-  const contentTypeHeader = response.headers["content-type"];
-  const contentType =
-    typeof contentTypeHeader === "string" ? contentTypeHeader : null;
+  const contentType = response.headers["content-type"] ?? null;
 
   if (
     !contentType ||
     !/^(text\/html|application\/xhtml\+xml)(?:;|$)/i.test(contentType)
   ) {
     throw new StaticPageScrapeError(
+      "UNSUPPORTED_CONTENT_TYPE",
       `Unsupported content type: ${contentType ?? "missing"}`,
     );
   }
 
   if (typeof response.data !== "string") {
-    throw new StaticPageScrapeError("Static page response was not text");
+    throw new StaticPageScrapeError(
+      "HTTP_PERMANENT",
+      "Static page response was not text",
+    );
   }
 
   if (Buffer.byteLength(response.data, "utf8") > MAX_STATIC_PAGE_BYTES) {
-    throw new StaticPageScrapeError("Static page exceeded the 2 MiB limit");
+    throw new StaticPageScrapeError(
+      "RESPONSE_TOO_LARGE",
+      "Static page exceeded the 2 MiB limit",
+    );
   }
 
   const cleaned = cleanHtml(response.data);
   if (!cleaned.content) {
     throw new StaticPageScrapeError(
+      "EMPTY_CONTENT",
       "Static page did not contain readable content",
     );
   }
 
   return {
-    url: response.request?.res?.responseUrl ?? url,
+    url: response.url,
     title: cleaned.title,
     rawHtml: response.data,
     content: cleaned.content,
@@ -81,4 +104,3 @@ export async function scrapeStaticPage(
     fetchedAt: new Date(),
   };
 }
-
