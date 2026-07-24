@@ -2,6 +2,7 @@ import {
   normalizeCrawlUrl,
   UrlNormalizationError,
 } from "@distributed-rag/shared";
+import { RenderMode } from "@prisma/client";
 import { z } from "zod";
 
 const absoluteHttpUrl = z
@@ -26,6 +27,9 @@ export const createCrawlBodySchema = z
     url: absoluteHttpUrl,
     maxPages: z.number().int().min(1).max(500).default(25),
     maxDepth: z.number().int().min(0).max(10).default(2),
+    renderMode: z
+      .enum([RenderMode.STATIC, RenderMode.JAVASCRIPT])
+      .default(RenderMode.STATIC),
   })
   .strict();
 

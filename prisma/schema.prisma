@@ -26,10 +26,16 @@ enum CrawlPageStatus {
   FAILED
 }
 
+enum RenderMode {
+  STATIC
+  JAVASCRIPT
+}
+
 model Crawl {
   id               String      @id @default(uuid()) @db.Uuid
   seedUrl          String      @map("seed_url") @db.VarChar(2048)
   normalizedOrigin String      @map("normalized_origin") @db.VarChar(2048)
+  renderMode       RenderMode  @default(STATIC) @map("render_mode")
   status           CrawlStatus @default(QUEUED)
   maxPages         Int         @default(25) @map("max_pages")
   maxDepth         Int         @default(2) @map("max_depth")

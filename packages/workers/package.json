@@ -16,6 +16,7 @@
     "cheerio": "1.2.0",
     "dotenv": "17.2.3",
     "ioredis": "5.11.1",
+    "playwright": "1.61.1",
     "robots-parser": "3.0.1"
   },
   "devDependencies": {

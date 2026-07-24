@@ -76,6 +76,11 @@ describe.runIf(runIntegrationTests)("Redis crawler politeness", () => {
     const config: CrawlerConfig = {
       userAgent: "FixtureBot/1.0",
       defaultIntervalMs: 10,
+      javascriptNavigationTimeoutMs: 15_000,
+      javascriptSettleMs: 0,
+      javascriptWaitSelector: undefined,
+      javascriptWaitSelectorTimeoutMs: 5_000,
+      javascriptMaxContexts: 1,
       allowPrivateTestTargets: true,
     };
     const first = new RobotsService(

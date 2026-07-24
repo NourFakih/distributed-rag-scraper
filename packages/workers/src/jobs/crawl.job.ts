@@ -1,4 +1,8 @@
-import { CrawlPageStatus, CrawlStatus } from "@prisma/client";
+import {
+  CrawlPageStatus,
+  CrawlStatus,
+  RenderMode,
+} from "@prisma/client";
 import {
   crawlJobDataSchema,
   getCrawlQueue,
@@ -152,17 +156,24 @@ export async function processCrawlJobWithServices(
       return markRobotsSkipped(crawlPageId, crawlPage.crawlId);
     }
 
-    const page = await scrapeStaticPage(
-      crawlPage.url,
-      crawlPage.crawl.normalizedOrigin,
-      services.httpClient,
-      robotsDecision.crawlDelayMs,
-      (redirectUrl) =>
-        services.robotsService.check(
-          redirectUrl,
-          crawlPage.crawl.normalizedOrigin,
-        ),
-    );
+    const page =
+      crawlPage.crawl.renderMode === RenderMode.JAVASCRIPT
+        ? await services.javascriptRenderer.render({
+            url: crawlPage.url,
+            allowedOrigin: crawlPage.crawl.normalizedOrigin,
+            crawlDelayMs: robotsDecision.crawlDelayMs,
+          })
+        : await scrapeStaticPage(
+            crawlPage.url,
+            crawlPage.crawl.normalizedOrigin,
+            services.httpClient,
+            robotsDecision.crawlDelayMs,
+            (redirectUrl) =>
+              services.robotsService.check(
+                redirectUrl,
+                crawlPage.crawl.normalizedOrigin,
+              ),
+          );
     const contentHash = calculateContentHash(page.content);
 
     const document = await prisma.document.upsert({

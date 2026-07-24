@@ -1,4 +1,4 @@
-import { CrawlPageStatus } from "@prisma/client";
+import { CrawlPageStatus, RenderMode } from "@prisma/client";
 import type {
   CrawlJobData,
   CrawlJobName,
@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   transaction: vi.fn(),
   queueAdd: vi.fn(),
   scrapeStaticPage: vi.fn(),
+  renderJavaScriptPage: vi.fn(),
   discoverLinks: vi.fn(),
   reserveDiscoveredPages: vi.fn(),
   refreshCrawlState: vi.fn(),
@@ -74,11 +75,18 @@ vi.mock("../src/runtime/crawler-services", () => ({
     config: {
       userAgent: "FixtureBot/1.0",
       defaultIntervalMs: 1,
+      javascriptNavigationTimeoutMs: 15_000,
+      javascriptSettleMs: 0,
+      javascriptWaitSelectorTimeoutMs: 5_000,
+      javascriptMaxContexts: 2,
       allowPrivateTestTargets: true,
     },
     httpClient: {},
     robotsService: {
       check: mocks.robotsCheck,
+    },
+    javascriptRenderer: {
+      render: mocks.renderJavaScriptPage,
     },
   }),
 }));
@@ -137,6 +145,7 @@ function crawlPageRecord(
       id: crawlId,
       normalizedOrigin: "https://example.com",
       maxDepth: 2,
+      renderMode: RenderMode.STATIC,
     },
   };
 }
@@ -150,6 +159,15 @@ describe("processCrawlJob", () => {
     mocks.scrapeStaticPage.mockResolvedValue({
       url: pageUrl,
       title: "Fixture",
+      rawHtml: "<main>Deterministic content</main>",
+      content,
+      httpStatus: 200,
+      contentType: "text/html",
+      fetchedAt: new Date("2026-07-24T10:00:00.000Z"),
+    });
+    mocks.renderJavaScriptPage.mockResolvedValue({
+      url: pageUrl,
+      title: "Rendered fixture",
       rawHtml: "<main>Deterministic content</main>",
       content,
       httpStatus: 200,
@@ -255,6 +273,28 @@ describe("processCrawlJob", () => {
     });
     expect(mocks.scrapeStaticPage).not.toHaveBeenCalled();
     expect(mocks.refreshCrawlState).toHaveBeenCalledWith(crawlId);
+  });
+
+  it("uses JavaScript rendering while preserving the shared persistence path", async () => {
+    mocks.crawlPageFindUnique.mockResolvedValueOnce({
+      ...crawlPageRecord(),
+      crawl: {
+        ...crawlPageRecord().crawl,
+        renderMode: RenderMode.JAVASCRIPT,
+      },
+    });
+
+    await expect(processCrawlJob(createJob())).resolves.toMatchObject({
+      outcome: "COMPLETED",
+      documentId,
+    });
+    expect(mocks.renderJavaScriptPage).toHaveBeenCalledWith({
+      url: pageUrl,
+      allowedOrigin: "https://example.com",
+      crawlDelayMs: 2_000,
+    });
+    expect(mocks.scrapeStaticPage).not.toHaveBeenCalled();
+    expect(mocks.documentUpsert).toHaveBeenCalledTimes(1);
   });
 
   it("marks a robots exclusion SKIPPED_ROBOTS without a dead letter", async () => {

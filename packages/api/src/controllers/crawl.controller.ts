@@ -14,8 +14,14 @@ export async function createCrawlController(
   request: Request,
   response: Response,
 ): Promise<void> {
-  const { url, maxPages, maxDepth } = request.body as CreateCrawlBody;
-  const { crawl, rootPage } = await createCrawl(url, maxPages, maxDepth);
+  const { url, maxPages, maxDepth, renderMode } =
+    request.body as CreateCrawlBody;
+  const { crawl, rootPage } = await createCrawl(
+    url,
+    maxPages,
+    maxDepth,
+    renderMode,
+  );
 
   response.status(202).json({
     data: {
@@ -25,6 +31,7 @@ export async function createCrawlController(
       status: crawl.status,
       maxPages: crawl.maxPages,
       maxDepth: crawl.maxDepth,
+      renderMode: crawl.renderMode,
       rootPageId: rootPage.id,
       createdAt: crawl.createdAt,
     },
@@ -44,6 +51,7 @@ export async function getCrawlController(
       url: crawl.seedUrl,
       seedUrl: crawl.seedUrl,
       normalizedOrigin: crawl.normalizedOrigin,
+      renderMode: crawl.renderMode,
       status: crawl.status,
       limits: {
         maxPages: crawl.maxPages,

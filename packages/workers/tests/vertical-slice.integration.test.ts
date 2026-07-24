@@ -90,6 +90,38 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
         return;
       }
 
+      if (requestMessage.url === "/javascript-root") {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end(`
+          <html><head><title>Unrendered root</title></head><body>
+            <script>
+              document.title = "Rendered crawl root";
+              const main = document.createElement("main");
+              main.innerHTML =
+                '<h1>Rendered crawl root</h1>' +
+                '<p>Persisted after JavaScript execution.</p>' +
+                '<a href="/javascript-child">JavaScript child</a>';
+              document.body.appendChild(main);
+            </script>
+          </body></html>
+        `);
+        return;
+      }
+
+      if (requestMessage.url === "/javascript-child") {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end(`
+          <html><head><title>JavaScript child</title></head><body>
+            <main><h1>JavaScript child</h1><p>Frontier child.</p></main>
+          </body></html>
+        `);
+        return;
+      }
+
       const graphPages: Record<string, string> = {
         "/graph/": `
           <html><head><title>Graph root</title></head><body><main>
@@ -381,6 +413,66 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
         },
       }),
     ).resolves.toBe(4);
+  });
+
+  it("renders JavaScript-created content and enters created links into the frontier", async () => {
+    const created = await request(app).post("/api/crawls").send({
+      url: `${fixtureBaseUrl}/javascript-root`,
+      maxPages: 2,
+      maxDepth: 1,
+      renderMode: "JAVASCRIPT",
+    });
+    const crawlId = String(created.body.data.id);
+    expect(created.body.data.renderMode).toBe("JAVASCRIPT");
+
+    const completed = await waitForStatus(app, crawlId, ["COMPLETED"]);
+    expect(completed.data.renderMode).toBe("JAVASCRIPT");
+    expect(completed.data.counters).toEqual({
+      discovered: 2,
+      completed: 2,
+      skipped: 0,
+      failed: 0,
+    });
+
+    const pages = await prisma.crawlPage.findMany({
+      where: {
+        crawlId,
+      },
+      include: {
+        document: true,
+      },
+      orderBy: {
+        depth: "asc",
+      },
+    });
+    expect(pages).toHaveLength(2);
+    expect(pages[0]?.document?.title).toBe("Rendered crawl root");
+    expect(pages[0]?.document?.content).toContain(
+      "Persisted after JavaScript execution.",
+    );
+    expect(pages[1]?.normalizedUrl).toBe(
+      `${fixtureBaseUrl}/javascript-child`,
+    );
+
+    await processCrawlJob({
+      id: pages[0]!.id,
+      data: {
+        crawlPageId: pages[0]!.id,
+      },
+      attemptsMade: 0,
+      opts: {
+        attempts: 3,
+      },
+    } as unknown as Job<CrawlJobData, CrawlJobResult, CrawlJobName>);
+    await expect(
+      prisma.document.count({
+        where: {
+          crawlPage: {
+            crawlId,
+          },
+        },
+      }),
+    ).resolves.toBe(2);
   });
 
   it("honors maxDepth zero and the configured depth boundary", async () => {

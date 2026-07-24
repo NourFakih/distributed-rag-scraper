@@ -1,4 +1,8 @@
-import { CrawlPageStatus, CrawlStatus } from "@prisma/client";
+import {
+  CrawlPageStatus,
+  CrawlStatus,
+  type RenderMode,
+} from "@prisma/client";
 import {
   getCrawlQueue,
   normalizedOrigin,
@@ -19,6 +23,7 @@ export async function createCrawl(
   seedUrl: string,
   maxPages: number,
   maxDepth: number,
+  renderMode: RenderMode,
 ) {
   const created = await prisma.$transaction(async (transaction) => {
     const crawl = await transaction.crawl.create({
@@ -27,6 +32,7 @@ export async function createCrawl(
         normalizedOrigin: normalizedOrigin(seedUrl),
         maxPages,
         maxDepth,
+        renderMode,
       },
     });
 

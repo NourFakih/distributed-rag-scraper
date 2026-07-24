@@ -7,7 +7,7 @@
       "dockerDashComposeVersion": "v2"
     }
   },
-  "postCreateCommand": "bash -lc 'if [ ! -f .env ]; then cp .env.example .env; fi && npm ci && npm run prisma:generate'",
+  "postCreateCommand": "bash -lc 'if [ ! -f .env ]; then cp .env.example .env; fi && npm ci && npm run prisma:generate && npx playwright install --with-deps chromium'",
   "forwardPorts": [
     3000
   ],
@@ -19,4 +19,3 @@
   },
   "remoteUser": "node"
 }
-

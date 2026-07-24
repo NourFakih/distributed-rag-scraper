@@ -7,20 +7,15 @@ import {
   retryableHttpFailure,
 } from "../http/crawler-http-client";
 import type { CrawlerHttpClient } from "../http/crawler-http-client";
-import { cleanHtml } from "../processing/clean-html";
+import {
+  processPageSource,
+  type ProcessedPage,
+} from "../processing/process-page";
 
 export const STATIC_FETCH_TIMEOUT_MS = CRAWLER_HTTP_TIMEOUT_MS;
 export const MAX_STATIC_PAGE_BYTES = 2 * 1024 * 1024;
 
-export interface StaticPageResult {
-  url: string;
-  title: string | null;
-  rawHtml: string;
-  content: string;
-  httpStatus: number;
-  contentType: string | null;
-  fetchedAt: Date;
-}
+export type StaticPageResult = ProcessedPage;
 
 export class StaticPageScrapeError extends CrawlFailure {
   public constructor(
@@ -86,21 +81,13 @@ export async function scrapeStaticPage(
     );
   }
 
-  const cleaned = cleanHtml(response.data);
-  if (!cleaned.content) {
-    throw new StaticPageScrapeError(
-      "EMPTY_CONTENT",
-      "Static page did not contain readable content",
-    );
-  }
-
-  return {
+  return processPageSource({
     url: response.url,
-    title: cleaned.title,
+    title: null,
     rawHtml: response.data,
-    content: cleaned.content,
     httpStatus: response.status,
+    headers: response.headers,
     contentType,
     fetchedAt: new Date(),
-  };
+  });
 }

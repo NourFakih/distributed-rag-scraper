@@ -21,6 +21,14 @@ jobs:
           --tag distributed-rag-api:${{ github.sha }}
           .
 
+      - name: Verify API image excludes Playwright
+        run: >-
+          docker run --rm
+          distributed-rag-api:${{ github.sha }}
+          node -e
+          "try { require.resolve('playwright'); process.exit(1); }
+          catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }"
+
   worker-image:
     runs-on: ubuntu-latest
     steps:
@@ -34,3 +42,12 @@ jobs:
           --target runtime
           --tag distributed-rag-worker:${{ github.sha }}
           .
+
+      - name: Verify worker Chromium installation
+        run: >-
+          docker run --rm
+          distributed-rag-worker:${{ github.sha }}
+          node -e
+          "const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          if (!fs.existsSync(chromium.executablePath())) process.exit(1);"

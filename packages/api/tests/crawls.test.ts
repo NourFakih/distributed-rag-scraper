@@ -1,4 +1,8 @@
-import { CrawlPageStatus, CrawlStatus } from "@prisma/client";
+import {
+  CrawlPageStatus,
+  CrawlStatus,
+  RenderMode,
+} from "@prisma/client";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -56,6 +60,7 @@ function queuedCrawl() {
     id: crawlId,
     seedUrl,
     normalizedOrigin: "https://example.com",
+    renderMode: RenderMode.STATIC,
     status: CrawlStatus.QUEUED,
     maxPages: 25,
     maxDepth: 2,
@@ -145,6 +150,7 @@ describe("crawl API", () => {
       status: "QUEUED",
       maxPages: 25,
       maxDepth: 2,
+      renderMode: "STATIC",
       rootPageId,
     });
     expect(sharedMocks.crawlCreate).toHaveBeenCalledWith({
@@ -153,6 +159,7 @@ describe("crawl API", () => {
         normalizedOrigin: "https://example.com",
         maxPages: 25,
         maxDepth: 2,
+        renderMode: RenderMode.STATIC,
       },
     });
     expect(sharedMocks.crawlPageCreate).toHaveBeenCalledWith({
@@ -191,6 +198,33 @@ describe("crawl API", () => {
     });
   });
 
+  it("accepts JAVASCRIPT rendering and returns it from crawl APIs", async () => {
+    sharedMocks.crawlCreate.mockResolvedValueOnce({
+      ...queuedCrawl(),
+      renderMode: RenderMode.JAVASCRIPT,
+    });
+    sharedMocks.crawlFindUnique.mockResolvedValueOnce({
+      ...queuedCrawl(),
+      renderMode: RenderMode.JAVASCRIPT,
+      pages: [rootPage()],
+    });
+
+    const created = await request(app).post("/api/crawls").send({
+      url: seedUrl,
+      renderMode: "JAVASCRIPT",
+    });
+    const retrieved = await request(app).get(`/api/crawls/${crawlId}`);
+
+    expect(created.status).toBe(202);
+    expect(created.body.data.renderMode).toBe("JAVASCRIPT");
+    expect(retrieved.body.data.renderMode).toBe("JAVASCRIPT");
+    expect(sharedMocks.crawlCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        renderMode: RenderMode.JAVASCRIPT,
+      }),
+    });
+  });
+
   it.each([
     ["relative URL", { url: "/relative" }],
     ["non-HTTP URL", { url: "ftp://example.com/file" }],
@@ -203,6 +237,7 @@ describe("crawl API", () => {
     ["maxPages above range", { url: seedUrl, maxPages: 501 }],
     ["maxDepth below range", { url: seedUrl, maxDepth: -1 }],
     ["maxDepth above range", { url: seedUrl, maxDepth: 11 }],
+    ["invalid renderMode", { url: seedUrl, renderMode: "AUTO" }],
   ])("returns 422 for %s", async (_label, body) => {
     const response = await request(app).post("/api/crawls").send(body);
 
@@ -268,6 +303,7 @@ describe("crawl API", () => {
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
       status: "COMPLETED",
+      renderMode: "STATIC",
       limits: {
         maxPages: 25,
         maxDepth: 2,

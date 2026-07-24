@@ -2,7 +2,7 @@
   "name": "distributed-rag-scraper",
   "version": "0.1.0",
   "private": true,
-  "description": "Distributed static crawl vertical slice for the RAG scraper assignment",
+  "description": "Distributed static and JavaScript crawl pipeline for the RAG scraper assignment",
   "license": "MIT",
   "workspaces": [
     "packages/*"
@@ -35,4 +35,3 @@
     "vitest": "2.1.9"
   }
 }
-

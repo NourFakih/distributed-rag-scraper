@@ -68,6 +68,11 @@ class FakeRedis {
 const config: CrawlerConfig = {
   userAgent: "FixtureBot/1.0",
   defaultIntervalMs: 1_000,
+  javascriptNavigationTimeoutMs: 15_000,
+  javascriptSettleMs: 0,
+  javascriptWaitSelector: undefined,
+  javascriptWaitSelectorTimeoutMs: 5_000,
+  javascriptMaxContexts: 1,
   allowPrivateTestTargets: true,
 };
 const origin = "https://example.com";

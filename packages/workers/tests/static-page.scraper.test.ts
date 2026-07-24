@@ -7,7 +7,6 @@ import type {
 import {
   MAX_STATIC_PAGE_BYTES,
   scrapeStaticPage,
-  StaticPageScrapeError,
 } from "../src/scraping/static-page.scraper";
 import {
   EXPECTED_FIXTURE_CONTENT,
@@ -43,6 +42,9 @@ describe("scrapeStaticPage", () => {
     expect(result.rawHtml).toBe(FIXTURE_HTML);
     expect(result.content).toBe(EXPECTED_FIXTURE_CONTENT);
     expect(result.httpStatus).toBe(200);
+    expect(result.headers["content-type"]).toBe(
+      "text/html; charset=utf-8",
+    );
     expect(result.contentType).toBe("text/html; charset=utf-8");
     expect(result.fetchedAt).toBeInstanceOf(Date);
   });
@@ -82,7 +84,10 @@ describe("scrapeStaticPage", () => {
           data: "<html><body><script>noise</script></body></html>",
         }),
       ),
-    ).rejects.toBeInstanceOf(StaticPageScrapeError);
+    ).rejects.toMatchObject({
+      category: "EMPTY_CONTENT",
+      retryable: false,
+    });
   });
 
   it("propagates HTTP and timeout errors from Axios", async () => {
