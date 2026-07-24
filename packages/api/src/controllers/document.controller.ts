@@ -11,7 +11,8 @@ export async function getDocumentController(
   response.status(200).json({
     data: {
       id: document.id,
-      crawlId: document.crawlId,
+      crawlId: document.crawlPage.crawlId,
+      crawlPageId: document.crawlPageId,
       url: document.url,
       title: document.title,
       rawHtml: document.rawHtml,

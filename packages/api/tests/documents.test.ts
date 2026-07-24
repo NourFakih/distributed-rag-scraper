@@ -19,6 +19,7 @@ import { createApp } from "../app";
 
 const documentId = "73e9e18c-6074-449f-ad3c-ca333c0e9483";
 const crawlId = "9bed41b1-e380-4eec-906e-c56cb52cfe72";
+const crawlPageId = "0e784632-c9e6-4b9d-afd2-8820eecb428b";
 const timestamp = new Date("2026-07-24T10:00:00.000Z");
 
 describe("document API", () => {
@@ -27,7 +28,7 @@ describe("document API", () => {
   beforeEach(() => {
     sharedMocks.documentFindUnique.mockResolvedValue({
       id: documentId,
-      crawlId,
+      crawlPageId,
       url: "https://example.com/page",
       title: "Fixture",
       rawHtml: "<main><p>Fixture content</p></main>",
@@ -38,6 +39,9 @@ describe("document API", () => {
       contentType: "text/html; charset=utf-8",
       fetchedAt: timestamp,
       createdAt: timestamp,
+      crawlPage: {
+        crawlId,
+      },
     });
   });
 
@@ -48,6 +52,7 @@ describe("document API", () => {
     expect(response.body.data).toMatchObject({
       id: documentId,
       crawlId,
+      crawlPageId,
       rawHtml: "<main><p>Fixture content</p></main>",
       content: "Fixture content",
       httpStatus: 200,
@@ -71,4 +76,3 @@ describe("document API", () => {
     expect(response.body.error.code).toBe("DOCUMENT_NOT_FOUND");
   });
 });
-

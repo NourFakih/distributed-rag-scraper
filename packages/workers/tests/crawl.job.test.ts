@@ -1,4 +1,4 @@
-import { CrawlStatus } from "@prisma/client";
+import { CrawlPageStatus } from "@prisma/client";
 import type {
   CrawlJobData,
   CrawlJobName,
@@ -8,25 +8,40 @@ import type { Job } from "bullmq";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  crawlFindUnique: vi.fn(),
+  crawlPageFindUnique: vi.fn(),
+  crawlPageUpdate: vi.fn(),
+  crawlPageUpdateMany: vi.fn(),
   crawlUpdate: vi.fn(),
   documentUpsert: vi.fn(),
-  transactionCrawlUpdate: vi.fn(),
   transaction: vi.fn(),
+  queueAdd: vi.fn(),
   scrapeStaticPage: vi.fn(),
+  discoverLinks: vi.fn(),
+  reserveDiscoveredPages: vi.fn(),
+  refreshCrawlState: vi.fn(),
 }));
 
 vi.mock("@distributed-rag/shared", async () => {
   const { z } = await import("zod");
   return {
     crawlJobDataSchema: z.object({
-      crawlId: z.string().uuid(),
-      url: z.string().url(),
+      crawlPageId: z.string().uuid(),
+    }),
+    SCRAPE_STATIC_PAGE_JOB: "scrape-static-page",
+    getCrawlQueue: () => ({
+      add: mocks.queueAdd,
     }),
     prisma: {
+      crawlPage: {
+        findUnique: mocks.crawlPageFindUnique,
+        update: mocks.crawlPageUpdate,
+        updateMany: mocks.crawlPageUpdateMany,
+      },
       crawl: {
-        findUnique: mocks.crawlFindUnique,
         update: mocks.crawlUpdate,
+      },
+      document: {
+        upsert: mocks.documentUpsert,
       },
       $transaction: mocks.transaction,
     },
@@ -37,9 +52,23 @@ vi.mock("../src/scraping/static-page.scraper", () => ({
   scrapeStaticPage: mocks.scrapeStaticPage,
 }));
 
+vi.mock("../src/scraping/link-discovery", () => ({
+  discoverLinks: mocks.discoverLinks,
+}));
+
+vi.mock("../src/crawl/discover-pages", () => ({
+  reserveDiscoveredPages: mocks.reserveDiscoveredPages,
+}));
+
+vi.mock("../src/crawl/crawl-state", () => ({
+  refreshCrawlState: mocks.refreshCrawlState,
+}));
+
 import { processCrawlJob } from "../src/jobs/crawl.job";
 
 const crawlId = "9bed41b1-e380-4eec-906e-c56cb52cfe72";
+const crawlPageId = "0e784632-c9e6-4b9d-afd2-8820eecb428b";
+const childPageId = "a974d4a7-0cf7-461f-a78c-ef2a12e068a5";
 const documentId = "73e9e18c-6074-449f-ad3c-ca333c0e9483";
 const pageUrl = "https://example.com/page";
 const content = "Deterministic content";
@@ -51,8 +80,7 @@ function createJob(attemptsMade = 0): Job<
 > {
   return {
     data: {
-      crawlId,
-      url: pageUrl,
+      crawlPageId,
     },
     attemptsMade,
     opts: {
@@ -61,28 +89,38 @@ function createJob(attemptsMade = 0): Job<
   } as unknown as Job<CrawlJobData, CrawlJobResult, CrawlJobName>;
 }
 
-function crawlRecord(
-  status: CrawlStatus = CrawlStatus.QUEUED,
+function crawlPageRecord(
+  status: CrawlPageStatus = CrawlPageStatus.QUEUED,
   document: { id: string; contentHash: string } | null = null,
 ) {
   return {
-    id: crawlId,
+    id: crawlPageId,
+    crawlId,
     url: pageUrl,
+    normalizedUrl: pageUrl,
+    depth: 0,
+    parentPageId: null,
     status,
     attempts: 0,
-    errorMessage: null,
+    error: null,
     startedAt: null,
     completedAt: null,
     createdAt: new Date(),
-    updatedAt: new Date(),
     document,
+    crawl: {
+      id: crawlId,
+      normalizedOrigin: "https://example.com",
+      maxDepth: 2,
+    },
   };
 }
 
 describe("processCrawlJob", () => {
   beforeEach(() => {
-    mocks.crawlFindUnique.mockResolvedValue(crawlRecord());
-    mocks.crawlUpdate.mockResolvedValue(crawlRecord());
+    mocks.crawlPageFindUnique.mockResolvedValue(crawlPageRecord());
+    mocks.crawlPageUpdate.mockResolvedValue(crawlPageRecord());
+    mocks.crawlPageUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.crawlUpdate.mockResolvedValue({});
     mocks.scrapeStaticPage.mockResolvedValue({
       url: pageUrl,
       title: "Fixture",
@@ -95,37 +133,43 @@ describe("processCrawlJob", () => {
     mocks.documentUpsert.mockResolvedValue({
       id: documentId,
     });
-    mocks.transactionCrawlUpdate.mockResolvedValue(crawlRecord());
+    mocks.discoverLinks.mockReturnValue([]);
+    mocks.reserveDiscoveredPages.mockResolvedValue([]);
+    mocks.refreshCrawlState.mockResolvedValue(undefined);
+    mocks.queueAdd.mockResolvedValue({ id: childPageId });
     mocks.transaction.mockImplementation(
       async (
         callback: (transaction: {
-          document: { upsert: typeof mocks.documentUpsert };
-          crawl: { update: typeof mocks.transactionCrawlUpdate };
+          crawlPage: { update: typeof mocks.crawlPageUpdate };
+          crawl: { update: typeof mocks.crawlUpdate };
         }) => Promise<unknown>,
       ) =>
         callback({
-          document: {
-            upsert: mocks.documentUpsert,
+          crawlPage: {
+            update: mocks.crawlPageUpdate,
           },
           crawl: {
-            update: mocks.transactionCrawlUpdate,
+            update: mocks.crawlUpdate,
           },
         }),
     );
   });
 
-  it("persists one Document and completes the Crawl transactionally", async () => {
+  it("persists one Document and completes the CrawlPage", async () => {
     const result = await processCrawlJob(createJob());
 
-    expect(result.documentId).toBe(documentId);
+    expect(result).toMatchObject({
+      crawlPageId,
+      documentId,
+    });
     expect(result.contentHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(mocks.crawlUpdate).toHaveBeenCalledWith(
+    expect(mocks.crawlPageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          id: crawlId,
+          id: crawlPageId,
         },
         data: expect.objectContaining({
-          status: CrawlStatus.PROCESSING,
+          status: CrawlPageStatus.PROCESSING,
           attempts: {
             increment: 1,
           },
@@ -135,33 +179,94 @@ describe("processCrawlJob", () => {
     expect(mocks.documentUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          crawlId,
+          crawlPageId,
         },
       }),
     );
-    expect(mocks.transactionCrawlUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          status: CrawlStatus.COMPLETED,
-        }),
-      }),
-    );
+    expect(mocks.crawlPageUpdate).toHaveBeenLastCalledWith({
+      where: {
+        id: crawlPageId,
+      },
+      data: {
+        status: CrawlPageStatus.COMPLETED,
+        error: null,
+        completedAt: expect.any(Date),
+      },
+    });
+    expect(mocks.refreshCrawlState).toHaveBeenCalledWith(crawlId);
   });
 
-  it("returns the existing Document for an already completed Crawl", async () => {
-    mocks.crawlFindUnique.mockResolvedValueOnce(
-      crawlRecord(CrawlStatus.COMPLETED, {
+  it("returns the existing Document for an already completed CrawlPage", async () => {
+    mocks.crawlPageFindUnique.mockResolvedValueOnce(
+      crawlPageRecord(CrawlPageStatus.COMPLETED, {
         id: documentId,
         contentHash: "a".repeat(64),
       }),
     );
 
     await expect(processCrawlJob(createJob())).resolves.toEqual({
+      crawlPageId,
       documentId,
       contentHash: "a".repeat(64),
     });
     expect(mocks.scrapeStaticPage).not.toHaveBeenCalled();
-    expect(mocks.crawlUpdate).not.toHaveBeenCalled();
+    expect(mocks.refreshCrawlState).toHaveBeenCalledWith(crawlId);
+  });
+
+  it("discovers and queues child pages using CrawlPage UUID job IDs", async () => {
+    mocks.discoverLinks.mockReturnValue([
+      {
+        url: "https://example.com/child",
+        normalizedUrl: "https://example.com/child",
+      },
+    ]);
+    mocks.reserveDiscoveredPages.mockResolvedValue([
+      {
+        id: childPageId,
+        normalizedUrl: "https://example.com/child",
+      },
+    ]);
+
+    await processCrawlJob(createJob());
+
+    expect(mocks.reserveDiscoveredPages).toHaveBeenCalledWith(
+      {
+        id: crawlPageId,
+        crawlId,
+        depth: 0,
+      },
+      expect.any(Array),
+    );
+    expect(mocks.queueAdd).toHaveBeenCalledWith(
+      "scrape-static-page",
+      {
+        crawlPageId: childPageId,
+      },
+      {
+        jobId: childPageId,
+      },
+    );
+    expect(mocks.crawlPageUpdateMany).toHaveBeenCalledWith({
+      where: {
+        id: childPageId,
+        status: CrawlPageStatus.DISCOVERED,
+      },
+      data: {
+        status: CrawlPageStatus.QUEUED,
+      },
+    });
+  });
+
+  it("does not discover links when the page is on the depth boundary", async () => {
+    mocks.crawlPageFindUnique.mockResolvedValueOnce({
+      ...crawlPageRecord(),
+      depth: 2,
+    });
+
+    await processCrawlJob(createJob());
+
+    expect(mocks.discoverLinks).not.toHaveBeenCalled();
+    expect(mocks.reserveDiscoveredPages).not.toHaveBeenCalled();
   });
 
   it("marks a retryable failure as RETRYING and rethrows it", async () => {
@@ -171,13 +276,13 @@ describe("processCrawlJob", () => {
       "temporary timeout",
     );
 
-    expect(mocks.crawlUpdate).toHaveBeenLastCalledWith({
+    expect(mocks.crawlPageUpdate).toHaveBeenLastCalledWith({
       where: {
-        id: crawlId,
+        id: crawlPageId,
       },
       data: {
-        status: CrawlStatus.RETRYING,
-        errorMessage: "temporary timeout",
+        status: CrawlPageStatus.RETRYING,
+        error: "temporary timeout",
         completedAt: null,
       },
     });
@@ -190,14 +295,25 @@ describe("processCrawlJob", () => {
 
     await expect(processCrawlJob(createJob(2))).rejects.toThrow("terminal");
 
-    const finalUpdate = mocks.crawlUpdate.mock.calls.at(-1)?.[0];
-    expect(finalUpdate.data.status).toBe(CrawlStatus.FAILED);
-    expect(finalUpdate.data.errorMessage).toHaveLength(2_000);
+    const finalUpdate = mocks.crawlPageUpdate.mock.calls.at(-1)?.[0];
+    expect(finalUpdate.data.status).toBe(CrawlPageStatus.FAILED);
+    expect(finalUpdate.data.error).toHaveLength(2_000);
     expect(finalUpdate.data.completedAt).toBeInstanceOf(Date);
+    expect(mocks.crawlPageUpdateMany).toHaveBeenCalledWith({
+      where: {
+        parentPageId: crawlPageId,
+        status: CrawlPageStatus.DISCOVERED,
+      },
+      data: {
+        status: CrawlPageStatus.SKIPPED,
+        error: "Parent page failed before this page could be queued",
+        completedAt: expect.any(Date),
+      },
+    });
   });
 
-  it("does not retry a job whose Crawl no longer exists", async () => {
-    mocks.crawlFindUnique.mockResolvedValueOnce(null);
+  it("does not retry a job whose CrawlPage no longer exists", async () => {
+    mocks.crawlPageFindUnique.mockResolvedValueOnce(null);
 
     await expect(processCrawlJob(createJob())).rejects.toMatchObject({
       name: "UnrecoverableError",
@@ -205,4 +321,3 @@ describe("processCrawlJob", () => {
     expect(mocks.scrapeStaticPage).not.toHaveBeenCalled();
   });
 });
-

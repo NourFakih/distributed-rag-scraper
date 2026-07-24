@@ -1,46 +1,31 @@
+import {
+  normalizeCrawlUrl,
+  UrlNormalizationError,
+} from "@distributed-rag/shared";
 import { z } from "zod";
 
 const absoluteHttpUrl = z
   .string()
-  .trim()
-  .min(1, "URL is required")
-  .max(2_048, "URL must be at most 2048 characters")
-  .superRefine((value, context) => {
-    let parsed: URL;
-
+  .transform((value, context) => {
     try {
-      parsed = new URL(value);
-    } catch {
+      return normalizeCrawlUrl(value);
+    } catch (error: unknown) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "URL must be an absolute HTTP or HTTPS URL",
+        message:
+          error instanceof UrlNormalizationError
+            ? error.message
+            : "URL is invalid",
       });
-      return;
+      return z.NEVER;
     }
-
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "URL must use HTTP or HTTPS",
-      });
-    }
-
-    if (parsed.username || parsed.password) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "URL must not contain embedded credentials",
-      });
-    }
-  })
-  .transform((value) => {
-    const normalized = new URL(value);
-    normalized.hash = "";
-    return normalized.toString();
   });
 
 export const createCrawlBodySchema = z
   .object({
     url: absoluteHttpUrl,
+    maxPages: z.number().int().min(1).max(500).default(25),
+    maxDepth: z.number().int().min(0).max(10).default(2),
   })
   .strict();
 
@@ -48,5 +33,12 @@ export const idParamsSchema = z.object({
   id: z.string().uuid("ID must be a valid UUID"),
 });
 
-export type CreateCrawlBody = z.infer<typeof createCrawlBodySchema>;
+export const crawlPagesQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  })
+  .strict();
 
+export type CreateCrawlBody = z.infer<typeof createCrawlBodySchema>;
+export type CrawlPagesQuery = z.infer<typeof crawlPagesQuerySchema>;

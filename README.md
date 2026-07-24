@@ -1,22 +1,24 @@
 # Distributed RAG Scraper
 
-This repository contains the first verified vertical slice of the distributed
-RAG scraper assignment:
+This repository contains the bounded same-origin static-crawling slice of the
+distributed RAG scraper assignment:
 
 ```text
 POST /api/crawls
-  -> PostgreSQL Crawl row
-  -> Redis/BullMQ job
+  -> PostgreSQL Crawl + root CrawlPage
+  -> Redis/BullMQ CrawlPage job
   -> independent worker
   -> Axios + Cheerio static-page extraction
+  -> same-origin link discovery
+  -> bounded child CrawlPage jobs
   -> normalized content + SHA-256
-  -> PostgreSQL Document row
-  -> GET crawl/document APIs
+  -> one PostgreSQL Document per CrawlPage
+  -> aggregate crawl/page/document APIs
 ```
 
-The implementation is intentionally limited to one static HTML page per crawl.
-React, Playwright, recursive crawling, robots enforcement, pgvector, embeddings,
-RAG, and the 500-page experiment are later phases.
+Each run defaults to at most 25 pages and depth 2. React, Playwright, robots.txt
+enforcement, pgvector, embeddings, RAG, performance experiments, and the
+500-page crawl are later phases.
 
 ## Stack
 
@@ -44,7 +46,7 @@ RAG, and the 500-page experiment are later phases.
    ```bash
    curl -i \
      -H "Content-Type: application/json" \
-     -d '{"url":"https://example.com/"}' \
+     -d '{"url":"https://example.com/","maxPages":5,"maxDepth":1}' \
      http://localhost:3000/api/crawls
    ```
 
@@ -54,7 +56,13 @@ RAG, and the 500-page experiment are later phases.
    curl http://localhost:3000/api/crawls/COPY_CRAWL_ID_HERE
    ```
 
-5. After the status becomes `COMPLETED`, copy `documentId`:
+5. Inspect every page in the bounded run:
+
+   ```bash
+   curl "http://localhost:3000/api/crawls/COPY_CRAWL_ID_HERE/pages?page=1&pageSize=25"
+   ```
+
+6. After the status becomes `COMPLETED`, copy a `documentId`:
 
    ```bash
    curl http://localhost:3000/api/documents/COPY_DOCUMENT_ID_HERE
@@ -94,57 +102,74 @@ Strict JSON body:
 
 ```json
 {
-  "url": "https://example.com/page"
+  "url": "https://example.com/docs/",
+  "maxPages": 25,
+  "maxDepth": 2
 }
 ```
 
 The URL must be absolute HTTP/HTTPS, may not contain credentials, and is limited
-to 2,048 characters. URL fragments are removed. The endpoint returns
-`202 Accepted` after the Crawl row and BullMQ job exist. If queueing fails, it
-marks the Crawl `FAILED` and returns `503`.
+to 2,048 characters. URL fragments are removed and common downloadable
+extensions are rejected. `maxPages` accepts 1–500 and `maxDepth` accepts 0–10;
+omitting both preserves the basic request and applies defaults of 25 and 2. The
+endpoint returns `202 Accepted` after the Crawl, root CrawlPage, and BullMQ job
+exist. If root queueing fails, it marks the run failed and returns `503`.
 
 ### `GET /api/crawls/:id`
 
-Returns URL, status, attempts, a bounded error, related `documentId`, and all
-Crawl timestamps. Invalid UUIDs return `422`; unknown UUIDs return `404`.
+Returns the aggregate run status, limits, counters, root page/document
+information, timestamps, and whether completion included child-page failures.
+Invalid UUIDs return `422`; unknown UUIDs return `404`.
+
+### `GET /api/crawls/:id/pages`
+
+Returns CrawlPage metadata without raw HTML. `page` defaults to 1 and `pageSize`
+defaults to 25 with a maximum of 100. Each result includes depth, parent,
+status, attempts, bounded error, timestamps, and optional `documentId`.
 
 ### `GET /api/documents/:id`
 
-Returns source URL, title, raw HTML, normalized content, lowercase SHA-256,
-HTTP metadata, and timestamps. Invalid UUIDs return `422`; unknown UUIDs return
-`404`.
+Returns the owning Crawl/CrawlPage IDs, source URL, title, raw HTML, normalized
+content, lowercase SHA-256, HTTP metadata, and timestamps. Invalid UUIDs return
+`422`; unknown UUIDs return `404`.
 
 ## Worker guarantees
 
 - The API and worker are separate deployable processes and containers.
-- Each job uses the Crawl UUID as `jobId`.
+- Each job operates on a CrawlPage UUID and uses that UUID as `jobId`.
 - A job gets three attempts with exponential backoff starting at one second.
-- Crawl state changes through `QUEUED`, `PROCESSING`, optionally `RETRYING`,
-  and then `COMPLETED` or `FAILED`.
-- A unique `crawlId` on Document plus an upsert makes redelivery idempotent.
-- Document persistence and Crawl completion occur in one database transaction.
+- Page state changes through `DISCOVERED`, `QUEUED`, `PROCESSING`, optionally
+  `RETRYING`, and then a terminal state.
+- A unique `crawlPageId` on Document plus an upsert makes redelivery idempotent.
+- The unique `(crawlId, normalizedUrl)` database key prevents duplicate pages.
+- Discovery locks the Crawl row while checking remaining capacity, so
+  concurrent workers cannot exceed `maxPages`.
+- The aggregate Crawl becomes `COMPLETED` only after no page remains active,
+  and its counters preserve child failures.
 - Terminally failed BullMQ jobs remain inspectable.
 
 Static fetching has a 15-second timeout, five-redirect limit, 2 MiB limit, and
 requires a successful HTML/XHTML response. Cleaning removes executable,
 navigation, page-chrome, and embedded-media elements; it prefers `main`, then
-`article`, then `body`.
+`article`, then `body`. Link extraction uses the raw HTML and final response URL,
+honors valid same-origin `<base>` values and `nofollow`, and excludes external,
+non-HTTP, malformed, empty, duplicate, and downloadable links.
 
 ## Security boundary
 
 This first slice is for a private Codespaces demonstration. URL validation does
 not yet include DNS resolution, redirect-by-redirect address checks, or private
 network blocking, so the API must not be publicly exposed. Complete SSRF
-protection, robots.txt enforcement, per-domain throttling, and terms-of-service
-adapters belong to the compliance/crawler phase.
+protection, robots.txt enforcement, Redis-backed per-domain throttling, and
+terms-of-service adapters belong to the compliance/crawler phase.
 
 ## Repository layout
 
 ```text
 packages/
   api/       Express routes, validation, services, and API tests
-  shared/    Prisma singleton, lazy Redis queue, and job contracts
-  workers/   static scraper, cleaner, hasher, worker, and pipeline tests
+  shared/    Prisma, lazy Redis queue, URL normalization, and job contracts
+  workers/   bounded discovery, static scraper, cleaner, worker, and tests
 prisma/      schema and committed migration
 .devcontainer/
 .github/workflows/
@@ -152,4 +177,3 @@ docker-compose.yml
 ```
 
 The original assignment is preserved unchanged in `rag_assignment.txt`.
-

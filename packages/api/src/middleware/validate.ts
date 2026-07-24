@@ -3,7 +3,7 @@ import type { ZodType } from "zod";
 
 import { AppError } from "./error-handler";
 
-type RequestPart = "body" | "params";
+type RequestPart = "body" | "params" | "query";
 
 export function validate(
   schema: ZodType,
@@ -29,11 +29,12 @@ export function validate(
 
     if (requestPart === "body") {
       request.body = result.data;
-    } else {
+    } else if (requestPart === "params") {
       request.params = result.data as Record<string, string>;
+    } else {
+      request.query = result.data as typeof request.query;
     }
 
     next();
   };
 }
-

@@ -1,6 +1,7 @@
-import { CrawlStatus } from "@prisma/client";
+import { CrawlPageStatus, CrawlStatus } from "@prisma/client";
 import {
   getCrawlQueue,
+  normalizedOrigin,
   prisma,
   SCRAPE_STATIC_PAGE_JOB,
 } from "@distributed-rag/shared";
@@ -14,34 +15,70 @@ function errorMessage(error: unknown): string {
   return message.slice(0, MAX_ERROR_MESSAGE_LENGTH);
 }
 
-export async function createCrawl(url: string) {
-  const crawl = await prisma.crawl.create({
-    data: {
-      url,
-    },
+export async function createCrawl(
+  seedUrl: string,
+  maxPages: number,
+  maxDepth: number,
+) {
+  const created = await prisma.$transaction(async (transaction) => {
+    const crawl = await transaction.crawl.create({
+      data: {
+        seedUrl,
+        normalizedOrigin: normalizedOrigin(seedUrl),
+        maxPages,
+        maxDepth,
+      },
+    });
+
+    const rootPage = await transaction.crawlPage.create({
+      data: {
+        crawlId: crawl.id,
+        url: seedUrl,
+        normalizedUrl: seedUrl,
+        depth: 0,
+        status: CrawlPageStatus.QUEUED,
+      },
+    });
+
+    return {
+      crawl,
+      rootPage,
+    };
   });
 
   try {
     await getCrawlQueue().add(
       SCRAPE_STATIC_PAGE_JOB,
       {
-        crawlId: crawl.id,
-        url: crawl.url,
+        crawlPageId: created.rootPage.id,
       },
       {
-        jobId: crawl.id,
+        jobId: created.rootPage.id,
       },
     );
   } catch (error: unknown) {
-    await prisma.crawl.update({
-      where: {
-        id: crawl.id,
-      },
-      data: {
-        status: CrawlStatus.FAILED,
-        errorMessage: errorMessage(error),
-        completedAt: new Date(),
-      },
+    await prisma.$transaction(async (transaction) => {
+      const completedAt = new Date();
+      await transaction.crawlPage.update({
+        where: {
+          id: created.rootPage.id,
+        },
+        data: {
+          status: CrawlPageStatus.FAILED,
+          error: errorMessage(error),
+          completedAt,
+        },
+      });
+      await transaction.crawl.update({
+        where: {
+          id: created.crawl.id,
+        },
+        data: {
+          status: CrawlStatus.FAILED,
+          failedCount: 1,
+          completedAt,
+        },
+      });
     });
 
     throw new AppError(
@@ -51,7 +88,7 @@ export async function createCrawl(url: string) {
     );
   }
 
-  return crawl;
+  return created;
 }
 
 export async function getCrawlById(id: string) {
@@ -60,9 +97,20 @@ export async function getCrawlById(id: string) {
       id,
     },
     include: {
-      document: {
-        select: {
-          id: true,
+      pages: {
+        where: {
+          depth: 0,
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+        take: 1,
+        include: {
+          document: {
+            select: {
+              id: true,
+            },
+          },
         },
       },
     },
@@ -75,3 +123,61 @@ export async function getCrawlById(id: string) {
   return crawl;
 }
 
+export async function getCrawlPages(
+  id: string,
+  page: number,
+  pageSize: number,
+) {
+  const crawl = await prisma.crawl.findUnique({
+    where: {
+      id,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (!crawl) {
+    throw new AppError(404, "CRAWL_NOT_FOUND", "Crawl was not found");
+  }
+
+  const [pages, total] = await prisma.$transaction([
+    prisma.crawlPage.findMany({
+      where: {
+        crawlId: id,
+      },
+      orderBy: [
+        {
+          createdAt: "asc",
+        },
+        {
+          id: "asc",
+        },
+      ],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: {
+        document: {
+          select: {
+            id: true,
+          },
+        },
+      },
+    }),
+    prisma.crawlPage.count({
+      where: {
+        crawlId: id,
+      },
+    }),
+  ]);
+
+  return {
+    pages,
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.ceil(total / pageSize),
+    },
+  };
+}

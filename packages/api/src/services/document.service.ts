@@ -7,6 +7,13 @@ export async function getDocumentById(id: string) {
     where: {
       id,
     },
+    include: {
+      crawlPage: {
+        select: {
+          crawlId: true,
+        },
+      },
+    },
   });
 
   if (!document) {
@@ -15,4 +22,3 @@ export async function getDocumentById(id: string) {
 
   return document;
 }
-

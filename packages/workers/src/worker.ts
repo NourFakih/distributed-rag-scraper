@@ -1,5 +1,6 @@
 import {
   CRAWL_QUEUE_NAME,
+  closeCrawlQueue,
   createRedisConnection,
   type CrawlJobData,
   type CrawlJobName,
@@ -29,7 +30,7 @@ export function createCrawlWorker(): CrawlWorkerRuntime {
 
   worker.on("completed", (job, result) => {
     console.log(
-      `Completed crawl job ${job.id ?? "unknown"} as document ${result.documentId}`,
+      `Completed CrawlPage ${result.crawlPageId} as document ${result.documentId}`,
     );
   });
 
@@ -47,10 +48,10 @@ export function createCrawlWorker(): CrawlWorkerRuntime {
     connection,
     close: async () => {
       await worker.close();
+      await closeCrawlQueue();
       if (connection.status !== "end") {
         await connection.quit();
       }
     },
   };
 }
-
