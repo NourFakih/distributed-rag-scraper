@@ -5,7 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@distributed-rag/shared": path.resolve(
-        __dirname,
+        import.meta.dirname,
         "packages/shared/src/index.ts",
       ),
     },
@@ -23,4 +23,3 @@ export default defineConfig({
     hookTimeout: 20_000,
   },
 });
-
