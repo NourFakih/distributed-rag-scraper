@@ -5,6 +5,7 @@ export const apiRateLimiter = rateLimit({
   limit: 120,
   standardHeaders: "draft-8",
   legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === "test",
   message: {
     error: {
       code: "RATE_LIMITED",
@@ -12,4 +13,3 @@ export const apiRateLimiter = rateLimit({
     },
   },
 });
-
