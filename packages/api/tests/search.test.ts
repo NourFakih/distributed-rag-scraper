@@ -38,6 +38,16 @@ const firstResult = {
   similarity: 0.93,
 };
 
+const firstKeywordResult = {
+  chunkId: "00000000-0000-4000-8000-000000000002",
+  documentId: "00000000-0000-4000-8000-000000000020",
+  url: "https://example.com/books",
+  title: "Book prices",
+  chunkIndex: 1,
+  excerpt: "The displayed book price is $10.",
+  relevance: 0.87,
+};
+
 describe("semantic search API", () => {
   const app = createApp();
 
@@ -58,6 +68,7 @@ describe("semantic search API", () => {
     expect(response.body).toEqual({
       data: {
         query: "crawler",
+        mode: "semantic",
         activeEmbeddingModel: {
           id: "fixture-e5",
           version: "fixture-v1",
@@ -69,6 +80,55 @@ describe("semantic search API", () => {
     });
     expect(JSON.stringify(response.body)).not.toContain("embedding");
     expect(sharedMocks.embedQuery).toHaveBeenCalledWith("crawler");
+  });
+
+  it("uses semantic mode by default and accepts it explicitly", async () => {
+    const defaultResponse = await request(app).get(
+      "/api/search?q=crawler",
+    );
+    const explicitResponse = await request(app).get(
+      "/api/search?q=crawler&mode=semantic",
+    );
+
+    expect(defaultResponse.status).toBe(200);
+    expect(explicitResponse.status).toBe(200);
+    expect(defaultResponse.body.data.mode).toBe("semantic");
+    expect(explicitResponse.body.data.mode).toBe("semantic");
+    expect(sharedMocks.embedQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs parameterized PostgreSQL full-text keyword search without embedding", async () => {
+    sharedMocks.queryRaw.mockResolvedValueOnce([firstKeywordResult]);
+
+    const response = await request(app).get(
+      "/api/search?q=book%20price&limit=2&mode=keyword",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: {
+        query: "book price",
+        mode: "keyword",
+        resultCount: 1,
+        results: [firstKeywordResult],
+      },
+    });
+    expect(sharedMocks.embedQuery).not.toHaveBeenCalled();
+
+    const sql = sharedMocks.queryRaw.mock.calls[0]?.[0] as {
+      strings: string[];
+      values: unknown[];
+    };
+    const statement = sql.strings.join("?");
+    expect(statement).toContain("plainto_tsquery('simple'");
+    expect(statement).toContain("document.\"title\"");
+    expect(statement).toContain("document.\"url\"");
+    expect(statement).toContain("chunk.\"content\"");
+    expect(statement).toMatch(
+      /ORDER BY "relevance" DESC, searchable_chunks\."chunkId" ASC/u,
+    );
+    expect(sql.values[0]).toBe("book price");
+    expect(sql.values.at(-1)).toBe(2);
   });
 
   it("returns HTTP 200 and no results for an empty index", async () => {
@@ -89,6 +149,7 @@ describe("semantic search API", () => {
     "/api/search?q=valid&limit=21",
     "/api/search?q=valid&limit=1.5",
     "/api/search?q=valid&limit=nope",
+    "/api/search?q=valid&mode=unsupported",
   ])("returns the standard 422 validation shape for %s", async (url) => {
     const response = await request(app).get(url);
 

@@ -192,11 +192,14 @@ content, lowercase SHA-256, HTTP metadata, and timestamps. Invalid UUIDs return
 ### `GET /api/search`
 
 `q` is required, trimmed, non-empty, and limited to 512 characters. `limit`
-defaults to 5 and accepts integers from 1 through 20:
+defaults to 5 and accepts integers from 1 through 20. `mode` accepts
+`semantic` or `keyword` and defaults to `semantic`, preserving the original
+behavior:
 
 ```bash
 curl --get http://localhost:3000/api/search \
   --data-urlencode "q=How does the crawler respect robots.txt?" \
+  --data-urlencode "mode=semantic" \
   --data-urlencode "limit=5"
 ```
 
@@ -206,6 +209,7 @@ Example response:
 {
   "data": {
     "query": "How does the crawler respect robots.txt?",
+    "mode": "semantic",
     "activeEmbeddingModel": {
       "id": "intfloat/multilingual-e5-small",
       "version": "hf:614241f622f53c4eeff9890bdc4f31cfecc418b3|transformers.js:4.2.0|fp32|mean|l2:v1",
@@ -229,6 +233,21 @@ Example response:
 
 The API never returns raw vectors. An empty or not-yet-embedded index is not an
 error: it returns HTTP 200, `resultCount: 0`, and `results: []`.
+
+Keyword mode does not load the embedding model. It uses parameterized
+PostgreSQL full-text search with the `simple` configuration across weighted
+Document titles, Chunk content, and source URLs. Results are ordered by
+relevance descending and Chunk UUID ascending:
+
+```bash
+curl --get http://localhost:3000/api/search \
+  --data-urlencode "q=book price" \
+  --data-urlencode "mode=keyword" \
+  --data-urlencode "limit=5"
+```
+
+Keyword results contain the same source and excerpt fields as semantic
+results, with a numeric `relevance` score instead of cosine `similarity`.
 
 ### `POST /api/ask`
 
