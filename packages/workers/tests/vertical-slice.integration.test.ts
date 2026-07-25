@@ -57,6 +57,7 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
   let fixtureServer: Server;
   let fixtureBaseUrl: string;
   let workerRuntime: CrawlWorkerRuntime;
+  let mutableChunkBody = "";
 
   beforeAll(async () => {
     fixtureServer = createServer((requestMessage, response) => {
@@ -87,6 +88,18 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
           "content-type": "application/json",
         });
         response.end('{"message":"not HTML"}');
+        return;
+      }
+
+      if (requestMessage.url === "/mutable-chunks") {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end(`
+          <html><head><title>Mutable chunks</title></head><body>
+            <main><h1>Mutable chunks</h1><p>${mutableChunkBody}</p></main>
+          </body></html>
+        `);
         return;
       }
 
@@ -226,6 +239,22 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
     );
     expect(documentResponse.body.data.rawHtml).toBe(FIXTURE_HTML);
     expect(documentResponse.body.data.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    const originalChunks = await prisma.chunk.findMany({
+      where: {
+        documentId,
+      },
+      orderBy: {
+        chunkIndex: "asc",
+      },
+    });
+    expect(originalChunks).toHaveLength(1);
+    expect(originalChunks[0]).toMatchObject({
+      chunkIndex: 0,
+      content: EXPECTED_FIXTURE_CONTENT,
+      startOffset: 0,
+      endOffset: EXPECTED_FIXTURE_CONTENT.length,
+    });
+    expect(originalChunks[0]?.contentHash).toMatch(/^[a-f0-9]{64}$/u);
 
     await processCrawlJob({
       data: {
@@ -246,6 +275,100 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
         },
       }),
     ).resolves.toBe(1);
+    await expect(
+      prisma.chunk.findMany({
+        where: {
+          documentId,
+        },
+        orderBy: {
+          chunkIndex: "asc",
+        },
+      }),
+    ).resolves.toEqual(originalChunks);
+  });
+
+  it("transactionally replaces stale chunks when document content changes", async () => {
+    mutableChunkBody = Array.from(
+      { length: 240 },
+      (_value, index) => `original-${index.toString().padStart(3, "0")}`,
+    ).join(" ");
+    const created = await request(app).post("/api/crawls").send({
+      url: `${fixtureBaseUrl}/mutable-chunks`,
+      maxDepth: 0,
+    });
+    const crawlId = String(created.body.data.id);
+    const completed = await waitForStatus(app, crawlId, ["COMPLETED"]);
+    const rootPage = completed.data.rootPage as Record<string, unknown>;
+    const crawlPageId = String(rootPage.id);
+    const documentId = String(completed.data.documentId);
+    const originalChunks = await prisma.chunk.findMany({
+      where: {
+        documentId,
+      },
+      orderBy: {
+        chunkIndex: "asc",
+      },
+    });
+    expect(originalChunks.length).toBeGreaterThan(1);
+
+    mutableChunkBody = "Replacement content is intentionally short.";
+    await prisma.$transaction([
+      prisma.crawlPage.update({
+        where: {
+          id: crawlPageId,
+        },
+        data: {
+          status: CrawlPageStatus.QUEUED,
+          completedAt: null,
+        },
+      }),
+      prisma.crawl.update({
+        where: {
+          id: crawlId,
+        },
+        data: {
+          status: CrawlStatus.PROCESSING,
+          completedAt: null,
+        },
+      }),
+    ]);
+
+    await processCrawlJob({
+      id: crawlPageId,
+      data: {
+        crawlPageId,
+      },
+      attemptsMade: 0,
+      opts: {
+        attempts: 3,
+      },
+    } as unknown as Job<CrawlJobData, CrawlJobResult, CrawlJobName>);
+
+    const replacementChunks = await prisma.chunk.findMany({
+      where: {
+        documentId,
+      },
+      orderBy: {
+        chunkIndex: "asc",
+      },
+    });
+    expect(replacementChunks).toHaveLength(1);
+    expect(replacementChunks[0]).toMatchObject({
+      chunkIndex: 0,
+      content:
+        "Mutable chunks\nReplacement content is intentionally short.",
+      startOffset: 0,
+      endOffset:
+        "Mutable chunks\nReplacement content is intentionally short."
+          .length,
+    });
+    expect(
+      replacementChunks.some((replacement) =>
+        originalChunks.some(
+          (original) => original.contentHash === replacement.contentHash,
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("persists and exposes one dead letter after retry exhaustion", async () => {

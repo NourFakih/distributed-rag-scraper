@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   crawlPageUpdateMany: vi.fn(),
   crawlUpdate: vi.fn(),
   documentUpsert: vi.fn(),
+  chunkFindMany: vi.fn(),
+  chunkDeleteMany: vi.fn(),
+  chunkCreateMany: vi.fn(),
   deadLetterUpsert: vi.fn(),
   transaction: vi.fn(),
   queueAdd: vi.fn(),
@@ -45,6 +48,11 @@ vi.mock("@distributed-rag/shared", async () => {
       },
       document: {
         upsert: mocks.documentUpsert,
+      },
+      chunk: {
+        findMany: mocks.chunkFindMany,
+        deleteMany: mocks.chunkDeleteMany,
+        createMany: mocks.chunkCreateMany,
       },
       deadLetter: {
         upsert: mocks.deadLetterUpsert,
@@ -96,6 +104,7 @@ import {
   RobotsExcludedError,
 } from "../src/errors/crawl-failure";
 import { processCrawlJob } from "../src/jobs/crawl.job";
+import { calculateContentHash } from "../src/lib/content-hash";
 
 const crawlId = "9bed41b1-e380-4eec-906e-c56cb52cfe72";
 const crawlPageId = "0e784632-c9e6-4b9d-afd2-8820eecb428b";
@@ -177,6 +186,9 @@ describe("processCrawlJob", () => {
     mocks.documentUpsert.mockResolvedValue({
       id: documentId,
     });
+    mocks.chunkFindMany.mockResolvedValue([]);
+    mocks.chunkDeleteMany.mockResolvedValue({ count: 0 });
+    mocks.chunkCreateMany.mockResolvedValue({ count: 1 });
     mocks.deadLetterUpsert.mockResolvedValue({
       id: "ded1ed00-0000-4000-8000-000000000001",
     });
@@ -196,6 +208,12 @@ describe("processCrawlJob", () => {
             updateMany: typeof mocks.crawlPageUpdateMany;
           };
           crawl: { update: typeof mocks.crawlUpdate };
+          document: { upsert: typeof mocks.documentUpsert };
+          chunk: {
+            findMany: typeof mocks.chunkFindMany;
+            deleteMany: typeof mocks.chunkDeleteMany;
+            createMany: typeof mocks.chunkCreateMany;
+          };
           deadLetter: { upsert: typeof mocks.deadLetterUpsert };
         }) => Promise<unknown>,
       ) =>
@@ -206,6 +224,14 @@ describe("processCrawlJob", () => {
           },
           crawl: {
             update: mocks.crawlUpdate,
+          },
+          document: {
+            upsert: mocks.documentUpsert,
+          },
+          chunk: {
+            findMany: mocks.chunkFindMany,
+            deleteMany: mocks.chunkDeleteMany,
+            createMany: mocks.chunkCreateMany,
           },
           deadLetter: {
             upsert: mocks.deadLetterUpsert,
@@ -243,6 +269,38 @@ describe("processCrawlJob", () => {
         },
       }),
     );
+    expect(mocks.chunkFindMany).toHaveBeenCalledWith({
+      where: {
+        documentId,
+      },
+      select: {
+        chunkIndex: true,
+        content: true,
+        contentHash: true,
+        startOffset: true,
+        endOffset: true,
+      },
+      orderBy: {
+        chunkIndex: "asc",
+      },
+    });
+    expect(mocks.chunkDeleteMany).toHaveBeenCalledWith({
+      where: {
+        documentId,
+      },
+    });
+    expect(mocks.chunkCreateMany).toHaveBeenCalledWith({
+      data: [
+        {
+          documentId,
+          chunkIndex: 0,
+          content,
+          contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          startOffset: 0,
+          endOffset: content.length,
+        },
+      ],
+    });
     expect(mocks.crawlPageUpdate).toHaveBeenLastCalledWith({
       where: {
         id: crawlPageId,
@@ -255,6 +313,53 @@ describe("processCrawlJob", () => {
       },
     });
     expect(mocks.refreshCrawlState).toHaveBeenCalledWith(crawlId);
+  });
+
+  it("leaves identical persisted chunks untouched during reprocessing", async () => {
+    mocks.chunkFindMany.mockResolvedValueOnce([
+      {
+        chunkIndex: 0,
+        content,
+        contentHash: calculateContentHash(content),
+        startOffset: 0,
+        endOffset: content.length,
+      },
+    ]);
+
+    await processCrawlJob(createJob());
+
+    expect(mocks.chunkDeleteMany).not.toHaveBeenCalled();
+    expect(mocks.chunkCreateMany).not.toHaveBeenCalled();
+  });
+
+  it("replaces stale chunks when reprocessed content changes", async () => {
+    mocks.chunkFindMany.mockResolvedValueOnce([
+      {
+        chunkIndex: 0,
+        content: "Stale content",
+        contentHash: calculateContentHash("Stale content"),
+        startOffset: 0,
+        endOffset: "Stale content".length,
+      },
+    ]);
+
+    await processCrawlJob(createJob());
+
+    expect(mocks.chunkDeleteMany).toHaveBeenCalledWith({
+      where: {
+        documentId,
+      },
+    });
+    expect(mocks.chunkCreateMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          documentId,
+          chunkIndex: 0,
+          content,
+          contentHash: calculateContentHash(content),
+        }),
+      ],
+    });
   });
 
   it("returns the existing Document for an already completed CrawlPage", async () => {

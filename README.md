@@ -19,6 +19,7 @@ POST /api/crawls
   -> bounded child CrawlPage jobs
   -> normalized content + SHA-256
   -> one PostgreSQL Document per CrawlPage
+  -> deterministic overlapping Chunk rows per Document
   -> aggregate crawl/page/document/dead-letter APIs
 ```
 
@@ -158,6 +159,37 @@ Returns the owning Crawl/CrawlPage IDs, source URL, title, raw HTML, normalized
 content, lowercase SHA-256, HTTP metadata, and timestamps. Invalid UUIDs return
 `422`; unknown UUIDs return `404`.
 
+## Document chunking
+
+Every successfully persisted Document is split deterministically by the worker
+into chunks targeting approximately 1,000 characters with approximately 150
+characters of overlap. The splitter prefers paragraph, line, and whitespace
+boundaries. Chunk offsets use inclusive starts and exclusive ends, so
+`document.content.slice(startOffset, endOffset)` reproduces the stored chunk
+exactly. Each chunk stores its own lowercase SHA-256 content hash.
+
+Document upsert, stale-chunk deletion, and replacement-chunk insertion share
+one PostgreSQL transaction. The unique `(documentId, chunkIndex)` key prevents
+duplicate positions, and deleting a Document cascades to its chunks. Chunking
+is an internal persistence stage in Stage 5A; embeddings, vector columns,
+retrieval, and chunk API endpoints are intentionally deferred.
+
+After starting the Compose stack and completing a crawl, inspect chunk counts:
+
+```bash
+docker compose exec postgres \
+  psql -U postgres -d distributed_rag \
+  -c 'SELECT document_id, COUNT(*) AS chunks FROM chunks GROUP BY document_id ORDER BY document_id;'
+```
+
+Inspect one document's ordered chunks:
+
+```bash
+docker compose exec postgres \
+  psql -U postgres -d distributed_rag \
+  -c "SELECT chunk_index, start_offset, end_offset, content_hash FROM chunks WHERE document_id = 'COPY_DOCUMENT_ID_HERE' ORDER BY chunk_index;"
+```
+
 ## Worker guarantees
 
 - The API and worker are separate deployable processes and containers.
@@ -170,6 +202,8 @@ content, lowercase SHA-256, HTTP metadata, and timestamps. Invalid UUIDs return
   `RETRYING`, and then a terminal state. Robots exclusions use
   `SKIPPED_ROBOTS`.
 - A unique `crawlPageId` on Document plus an upsert makes redelivery idempotent.
+- Document writes atomically replace their deterministic chunks, and the
+  unique `(documentId, chunkIndex)` key prevents duplicate chunks.
 - A unique `crawlPageId` on DeadLetter plus an upsert makes terminal-failure
   redelivery idempotent.
 - The unique `(crawlId, normalizedUrl)` database key prevents duplicate pages.
@@ -240,7 +274,7 @@ controls, or a production security review.
 packages/
   api/       Express routes, validation, services, and API tests
   shared/    Prisma, lazy Redis queue, URL normalization, and job contracts
-  workers/   bounded discovery, static/JavaScript renderers, worker, and tests
+  workers/   crawling, rendering, cleaning, chunking, worker, and tests
 prisma/      schema and committed migration
 .devcontainer/
 .github/workflows/

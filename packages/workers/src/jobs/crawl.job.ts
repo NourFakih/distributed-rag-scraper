@@ -29,6 +29,10 @@ import {
   getCrawlerServices,
   type CrawlerServices,
 } from "../runtime/crawler-services";
+import {
+  chunkText,
+  type DocumentChunk,
+} from "../processing/chunk-text";
 import { discoverLinks } from "../scraping/link-discovery";
 import { scrapeStaticPage } from "../scraping/static-page.scraper";
 
@@ -37,6 +41,26 @@ function isFinalAttempt(
 ): boolean {
   const maximumAttempts = job.opts.attempts ?? 1;
   return job.attemptsMade + 1 >= maximumAttempts;
+}
+
+function chunksMatch(
+  persistedChunks: DocumentChunk[],
+  expectedChunks: DocumentChunk[],
+): boolean {
+  return (
+    persistedChunks.length === expectedChunks.length &&
+    persistedChunks.every((persisted, index) => {
+      const expected = expectedChunks[index];
+      return (
+        expected !== undefined &&
+        persisted.chunkIndex === expected.chunkIndex &&
+        persisted.content === expected.content &&
+        persisted.contentHash === expected.contentHash &&
+        persisted.startOffset === expected.startOffset &&
+        persisted.endOffset === expected.endOffset
+      );
+    })
+  );
 }
 
 async function markRobotsSkipped(
@@ -175,32 +199,72 @@ export async function processCrawlJobWithServices(
               ),
           );
     const contentHash = calculateContentHash(page.content);
+    const chunks = chunkText(page.content);
 
-    const document = await prisma.document.upsert({
-      where: {
-        crawlPageId,
-      },
-      create: {
-        crawlPageId,
-        url: page.url,
-        title: page.title,
-        rawHtml: page.rawHtml,
-        content: page.content,
-        contentHash,
-        httpStatus: page.httpStatus,
-        contentType: page.contentType,
-        fetchedAt: page.fetchedAt,
-      },
-      update: {
-        url: page.url,
-        title: page.title,
-        rawHtml: page.rawHtml,
-        content: page.content,
-        contentHash,
-        httpStatus: page.httpStatus,
-        contentType: page.contentType,
-        fetchedAt: page.fetchedAt,
-      },
+    const document = await prisma.$transaction(async (transaction) => {
+      const persistedDocument = await transaction.document.upsert({
+        where: {
+          crawlPageId,
+        },
+        create: {
+          crawlPageId,
+          url: page.url,
+          title: page.title,
+          rawHtml: page.rawHtml,
+          content: page.content,
+          contentHash,
+          httpStatus: page.httpStatus,
+          contentType: page.contentType,
+          fetchedAt: page.fetchedAt,
+        },
+        update: {
+          url: page.url,
+          title: page.title,
+          rawHtml: page.rawHtml,
+          content: page.content,
+          contentHash,
+          httpStatus: page.httpStatus,
+          contentType: page.contentType,
+          fetchedAt: page.fetchedAt,
+        },
+      });
+
+      const persistedChunks = await transaction.chunk.findMany({
+        where: {
+          documentId: persistedDocument.id,
+        },
+        select: {
+          chunkIndex: true,
+          content: true,
+          contentHash: true,
+          startOffset: true,
+          endOffset: true,
+        },
+        orderBy: {
+          chunkIndex: "asc",
+        },
+      });
+      if (!chunksMatch(persistedChunks, chunks)) {
+        await transaction.chunk.deleteMany({
+          where: {
+            documentId: persistedDocument.id,
+          },
+        });
+        if (chunks.length > 0) {
+          await transaction.chunk.createMany({
+            data: chunks.map((chunk) => ({
+              documentId: persistedDocument.id,
+              chunkIndex: chunk.chunkIndex,
+              content: chunk.content,
+              contentHash: chunk.contentHash,
+              startOffset: chunk.startOffset,
+              endOffset: chunk.endOffset,
+            })),
+          });
+        }
+      }
+
+      return persistedDocument;
     });
 
     if (crawlPage.depth < crawlPage.crawl.maxDepth) {
