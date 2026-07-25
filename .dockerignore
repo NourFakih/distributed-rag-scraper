@@ -6,6 +6,8 @@ node_modules
 **/dist
 coverage
 .turbo
+.cache
+models
 .env
 .env.*
 !.env.example
@@ -14,4 +16,3 @@ coverage
 **/*.test.ts
 README.md
 rag_assignment.txt
-

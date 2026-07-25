@@ -21,7 +21,10 @@
     "test:watch": "vitest",
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
-    "db:migrate:dev": "prisma migrate dev"
+    "db:migrate:dev": "prisma migrate dev",
+    "chunks:backfill": "npm run build --workspace @distributed-rag/workers && node packages/workers/dist/src/cli/chunks-backfill.js",
+    "embeddings:backfill": "npm run build --workspace @distributed-rag/workers && node packages/workers/dist/src/cli/embeddings-backfill.js",
+    "test:model": "RUN_REAL_MODEL_TESTS=true vitest run packages/shared/tests/e5-real-model.test.ts"
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",

@@ -29,6 +29,13 @@ jobs:
           "try { require.resolve('playwright'); process.exit(1); }
           catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; }"
 
+      - name: Verify API image contains local embedding runtime
+        run: >-
+          docker run --rm
+          distributed-rag-api:${{ github.sha }}
+          node -e
+          "require.resolve('@huggingface/transformers');"
+
   worker-image:
     runs-on: ubuntu-latest
     steps:

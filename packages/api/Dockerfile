@@ -42,6 +42,7 @@ RUN npm ci \
 FROM node:24-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
+ENV MODEL_CACHE_DIR=/models/cache
 WORKDIR /app
 
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
@@ -52,6 +53,8 @@ COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/
 COPY --from=build --chown=node:node /app/packages/api/package.json ./packages/api/package.json
 COPY --from=build --chown=node:node /app/packages/api/dist ./packages/api/dist
 COPY --from=build --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
+RUN mkdir -p /models/cache \
+    && chown -R node:node /models
 
 USER node
 EXPOSE 3000

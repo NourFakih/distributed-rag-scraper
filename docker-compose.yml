@@ -2,7 +2,7 @@ name: distributed-rag-scraper
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.2-pg16-bookworm
     environment:
       POSTGRES_DB: distributed_rag
       POSTGRES_USER: postgres
@@ -56,6 +56,9 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/distributed_rag?schema=public
       REDIS_URL: redis://redis:6379
+      MODEL_CACHE_DIR: /models/cache
+      EMBEDDING_ALLOW_REMOTE_MODELS: ${EMBEDDING_ALLOW_REMOTE_MODELS:-true}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-16}
       CRAWLER_USER_AGENT: ${CRAWLER_USER_AGENT:-DistributedRagScraper/0.1 (+https://github.com/NourFakih/distributed-rag-scraper)}
     ports:
       - "3000:3000"
@@ -73,6 +76,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    volumes:
+      - model-cache:/models/cache
     restart: unless-stopped
 
   worker:
@@ -84,6 +89,9 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/distributed_rag?schema=public
       REDIS_URL: redis://redis:6379
+      MODEL_CACHE_DIR: /models/cache
+      EMBEDDING_ALLOW_REMOTE_MODELS: ${EMBEDDING_ALLOW_REMOTE_MODELS:-true}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-16}
       WORKER_CONCURRENCY: 5
       CRAWLER_USER_AGENT: ${CRAWLER_USER_AGENT:-DistributedRagScraper/0.1 (+https://github.com/NourFakih/distributed-rag-scraper)}
       CRAWLER_DEFAULT_INTERVAL_MS: ${CRAWLER_DEFAULT_INTERVAL_MS:-1000}
@@ -99,8 +107,11 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    volumes:
+      - model-cache:/models/cache
     restart: unless-stopped
 
 volumes:
   postgres-data:
   redis-data:
+  model-cache:

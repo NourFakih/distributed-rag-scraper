@@ -22,6 +22,33 @@ export {
 } from "./config/crawler";
 export type { CrawlerConfig } from "./config/crawler";
 export { closePrisma, prisma } from "./db/prisma";
+export {
+  DEFAULT_EMBEDDING_BATCH_SIZE,
+  E5_EMBEDDING_DIMENSION,
+  E5_INFERENCE_LIBRARY_VERSION,
+  E5_MODEL_ID,
+  E5_MODEL_REVISION,
+  E5_MODEL_VERSION,
+  formatE5Passage,
+  formatE5Query,
+  getEmbeddingProvider,
+  MAX_EMBEDDING_BATCH_SIZE,
+  MultilingualE5Provider,
+  resetEmbeddingProviderForTests,
+} from "./embedding/e5-provider";
+export {
+  EmbeddingConfigurationError,
+  EmbeddingInferenceError,
+  EmbeddingModelLoadError,
+} from "./embedding/embedding-provider";
+export type {
+  EmbeddingProvider,
+} from "./embedding/embedding-provider";
+export {
+  embeddingToSqlVector,
+  NORMALIZED_VECTOR_TOLERANCE,
+  normalizeEmbedding,
+} from "./embedding/vector";
 export { closeCrawlQueue, getCrawlQueue } from "./queue/crawl.queue";
 export { createRedisConnection } from "./queue/redis";
 export {

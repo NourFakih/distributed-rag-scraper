@@ -12,6 +12,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "dependencies": {
+    "@huggingface/transformers": "4.2.0",
     "@prisma/client": "6.19.3",
     "bullmq": "5.81.0",
     "ioredis": "5.11.1",

@@ -39,6 +39,7 @@ FROM node:24-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV MODEL_CACHE_DIR=/models/cache
 WORKDIR /app
 
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
@@ -50,6 +51,8 @@ COPY --from=build --chown=node:node /app/packages/workers/package.json ./package
 COPY --from=build --chown=node:node /app/packages/workers/dist ./packages/workers/dist
 COPY --from=build --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
 RUN npx playwright install --with-deps chromium \
+    && mkdir -p /models/cache \
+    && chown -R node:node /models \
     && chmod -R a+rX /ms-playwright \
     && rm -rf /var/lib/apt/lists/*
 

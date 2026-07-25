@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:0.8.2-pg16-bookworm
         env:
           POSTGRES_DB: distributed_rag_test
           POSTGRES_USER: postgres
@@ -39,6 +39,7 @@ jobs:
       CRAWLER_DEFAULT_INTERVAL_MS: "10"
       CRAWLER_ALLOW_PRIVATE_TEST_TARGETS: "true"
       NODE_ENV: test
+      EMBEDDING_ALLOW_REMOTE_MODELS: "false"
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -60,6 +61,13 @@ jobs:
 
       - name: Apply database migrations
         run: npm run db:migrate
+
+      - name: Verify pgvector extension
+        run: >-
+          docker exec
+          ${{ job.services.postgres.id }}
+          psql -U postgres -d distributed_rag_test -tAc
+          "SELECT extversion FROM pg_extension WHERE extname = 'vector';"
 
       - name: Lint
         run: npm run lint

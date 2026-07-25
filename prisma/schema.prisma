@@ -33,20 +33,20 @@ enum RenderMode {
 }
 
 model Crawl {
-  id               String      @id @default(uuid()) @db.Uuid
-  seedUrl          String      @map("seed_url") @db.VarChar(2048)
-  normalizedOrigin String      @map("normalized_origin") @db.VarChar(2048)
-  renderMode       RenderMode  @default(STATIC) @map("render_mode")
-  status           CrawlStatus @default(QUEUED)
-  maxPages         Int         @default(25) @map("max_pages")
-  maxDepth         Int         @default(2) @map("max_depth")
-  discoveredCount  Int         @default(1) @map("discovered_count")
-  completedCount   Int         @default(0) @map("completed_count")
-  skippedCount     Int         @default(0) @map("skipped_count")
-  failedCount      Int         @default(0) @map("failed_count")
-  completedAt      DateTime?   @map("completed_at")
-  createdAt        DateTime    @default(now()) @map("created_at")
-  updatedAt        DateTime    @updatedAt @map("updated_at")
+  id               String       @id @default(uuid()) @db.Uuid
+  seedUrl          String       @map("seed_url") @db.VarChar(2048)
+  normalizedOrigin String       @map("normalized_origin") @db.VarChar(2048)
+  renderMode       RenderMode   @default(STATIC) @map("render_mode")
+  status           CrawlStatus  @default(QUEUED)
+  maxPages         Int          @default(25) @map("max_pages")
+  maxDepth         Int          @default(2) @map("max_depth")
+  discoveredCount  Int          @default(1) @map("discovered_count")
+  completedCount   Int          @default(0) @map("completed_count")
+  skippedCount     Int          @default(0) @map("skipped_count")
+  failedCount      Int          @default(0) @map("failed_count")
+  completedAt      DateTime?    @map("completed_at")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
   pages            CrawlPage[]
   deadLetters      DeadLetter[]
 
@@ -118,15 +118,20 @@ model Document {
 }
 
 model Chunk {
-  id          String   @id @default(uuid()) @db.Uuid
-  documentId  String   @map("document_id") @db.Uuid
-  chunkIndex  Int      @map("chunk_index")
-  content     String   @db.Text
-  contentHash String   @map("content_hash") @db.Char(64)
-  startOffset Int      @map("start_offset")
-  endOffset   Int      @map("end_offset")
-  createdAt   DateTime @default(now()) @map("created_at")
-  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  id                  String                      @id @default(uuid()) @db.Uuid
+  documentId          String                      @map("document_id") @db.Uuid
+  chunkIndex          Int                         @map("chunk_index")
+  content             String                      @db.Text
+  contentHash         String                      @map("content_hash") @db.Char(64)
+  startOffset         Int                         @map("start_offset")
+  endOffset           Int                         @map("end_offset")
+  embedding           Unsupported("vector(384)")?
+  embeddingModel      String?                     @map("embedding_model") @db.VarChar(255)
+  embeddingVersion    String?                     @map("embedding_version") @db.VarChar(255)
+  embeddedContentHash String?                     @map("embedded_content_hash") @db.Char(64)
+  embeddedAt          DateTime?                   @map("embedded_at")
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  document            Document                    @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@unique([documentId, chunkIndex])
   @@map("chunks")

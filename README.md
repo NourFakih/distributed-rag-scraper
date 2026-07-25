@@ -1,8 +1,7 @@
 # Distributed RAG Scraper
 
-This repository contains the bounded, polite, fault-tolerant static and
-optional JavaScript-rendered crawling slices of the distributed RAG scraper
-assignment:
+This repository contains the bounded, polite, fault-tolerant crawler and its
+local multilingual semantic indexing and retrieval pipeline:
 
 ```text
 POST /api/crawls
@@ -20,19 +19,23 @@ POST /api/crawls
   -> normalized content + SHA-256
   -> one PostgreSQL Document per CrawlPage
   -> deterministic overlapping Chunk rows per Document
+  -> local multilingual E5 passage embeddings
+  -> PostgreSQL pgvector cosine index
+  -> semantic-search API
   -> aggregate crawl/page/document/dead-letter APIs
 ```
 
-Each run defaults to static rendering, at most 25 pages, and depth 2. React,
-pgvector, embeddings, RAG, performance experiments, and the 500-page crawl
-remain later phases.
+Each run defaults to static rendering, at most 25 pages, and depth 2. LLM
+answer generation, cited RAG answers, React, reranking, hybrid search,
+performance experiments, and the 500-page crawl remain later phases.
 
 ## Stack
 
 - Node.js 24 LTS, TypeScript, npm workspaces, and Turborepo
 - Express API
 - BullMQ and Redis
-- PostgreSQL and Prisma 6.19.3
+- PostgreSQL 16, pgvector 0.8.2, and Prisma 6.19.3
+- Transformers.js 4.2.0 and `intfloat/multilingual-e5-small`
 - Axios and Cheerio
 - Playwright 1.61.1 with Chromium only
 - Vitest and Supertest
@@ -76,8 +79,10 @@ remain later phases.
    curl http://localhost:3000/api/documents/COPY_DOCUMENT_ID_HERE
    ```
 
-Stop the stack with `docker compose down`. Named PostgreSQL and Redis volumes
-preserve data between restarts.
+Stop the stack with `docker compose down`. Named PostgreSQL, Redis, and model
+cache volumes preserve database records, queue state, and model files between
+restarts. Do not use `docker compose down --volumes` when preserving crawler
+or index data matters.
 
 ## Develop without local Docker
 
@@ -105,6 +110,19 @@ GitHub Actions supplies deterministic PostgreSQL and Redis service containers.
 The test-only private-target switch is rejected outside `NODE_ENV=test`.
 Crawler tests never access a public website: they use committed or local HTTP
 fixtures.
+
+Normal tests mock the embedding inference boundary and never download the E5
+model. Service-backed tests additionally require PostgreSQL/pgvector and Redis:
+
+```bash
+RUN_INTEGRATION_TESTS=true npm test
+```
+
+The optional real-model smoke test downloads and executes the pinned model:
+
+```bash
+npm run test:model
+```
 
 ## API contract
 
@@ -159,6 +177,47 @@ Returns the owning Crawl/CrawlPage IDs, source URL, title, raw HTML, normalized
 content, lowercase SHA-256, HTTP metadata, and timestamps. Invalid UUIDs return
 `422`; unknown UUIDs return `404`.
 
+### `GET /api/search`
+
+`q` is required, trimmed, non-empty, and limited to 512 characters. `limit`
+defaults to 5 and accepts integers from 1 through 20:
+
+```bash
+curl --get http://localhost:3000/api/search \
+  --data-urlencode "q=How does the crawler respect robots.txt?" \
+  --data-urlencode "limit=5"
+```
+
+Example response:
+
+```json
+{
+  "data": {
+    "query": "How does the crawler respect robots.txt?",
+    "activeEmbeddingModel": {
+      "id": "intfloat/multilingual-e5-small",
+      "version": "hf:614241f622f53c4eeff9890bdc4f31cfecc418b3|transformers.js:4.2.0|fp32|mean|l2:v1",
+      "dimension": 384
+    },
+    "resultCount": 1,
+    "results": [
+      {
+        "chunkId": "CHUNK_UUID",
+        "documentId": "DOCUMENT_UUID",
+        "url": "https://example.com/guide",
+        "title": "Crawler guide",
+        "chunkIndex": 2,
+        "excerpt": "The worker checks robots.txt before fetching...",
+        "similarity": 0.91
+      }
+    ]
+  }
+}
+```
+
+The API never returns raw vectors. An empty or not-yet-embedded index is not an
+error: it returns HTTP 200, `resultCount: 0`, and `results: []`.
+
 ## Document chunking
 
 Every successfully persisted Document is split deterministically by the worker
@@ -170,9 +229,10 @@ exactly. Each chunk stores its own lowercase SHA-256 content hash.
 
 Document upsert, stale-chunk deletion, and replacement-chunk insertion share
 one PostgreSQL transaction. The unique `(documentId, chunkIndex)` key prevents
-duplicate positions, and deleting a Document cascades to its chunks. Chunking
-is an internal persistence stage in Stage 5A; embeddings, vector columns,
-retrieval, and chunk API endpoints are intentionally deferred.
+duplicate positions, and deleting a Document cascades to its chunks. The same
+synchronizer is used by live crawl processing and the backfill. Unchanged rows
+retain valid embeddings; changed content transactionally replaces stale chunks,
+whose new rows begin without embeddings.
 
 After starting the Compose stack and completing a crawl, inspect chunk counts:
 
@@ -189,6 +249,103 @@ docker compose exec postgres \
   psql -U postgres -d distributed_rag \
   -c "SELECT chunk_index, start_offset, end_offset, content_hash FROM chunks WHERE document_id = 'COPY_DOCUMENT_ID_HERE' ORDER BY chunk_index;"
 ```
+
+Backfill Documents created before chunking was introduced:
+
+```bash
+npm run chunks:backfill -- --batch-size 25 --limit 500
+```
+
+With the Compose runtime, invoke the already-built worker command:
+
+```bash
+docker compose run --rm worker \
+  node packages/workers/dist/src/cli/chunks-backfill.js \
+  --batch-size 25 --limit 500
+```
+
+Both flags require positive integers. `--batch-size` defaults to 25 and is
+bounded at 500; `--limit` is optional. Cursor pagination, per-Document
+transactions, and error isolation make the command safe to stop and rerun. Its
+summary reports inspected, processed, skipped, and failed Documents plus
+created, retained, and replaced chunks.
+
+## Local embeddings and pgvector
+
+The committed migration enables the `vector` extension and adds nullable
+`vector(384)` storage plus model, model-version, embedded-content-hash, and
+timestamp metadata to each Chunk. Existing Documents and Chunks remain in
+place and initially have no embedding. A partial HNSW index with
+`vector_cosine_ops` indexes only non-null vectors. HNSW keeps retrieval
+practical as the index grows; it is approximate, while the final SQL ordering
+is deterministic by cosine similarity descending and Chunk UUID ascending.
+
+The pinned model is
+[`intfloat/multilingual-e5-small`](https://huggingface.co/intfloat/multilingual-e5-small)
+at revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`, executed locally through
+Transformers.js 4.2.0. It produces 384-dimensional embeddings. The provider
+adds `passage: ` to chunks and `query: ` to searches, removes an existing E5
+prefix before applying the correct one, mean-pools, L2-normalizes, and verifies
+dimension, finiteness, and unit magnitude before a vector can be stored or
+queried.
+
+An embedding is current only when all of these match:
+
+- a vector exists;
+- `embedding_model` is the active model ID;
+- `embedding_version` is the pinned model revision, inference library,
+  precision, pooling, normalization, and provider-contract version;
+- `embedded_content_hash` equals the Chunk's current `content_hash`.
+
+Backfill missing or stale embeddings:
+
+```bash
+npm run embeddings:backfill -- --batch-size 16 --limit 100
+```
+
+Or use the worker image and shared Compose model cache:
+
+```bash
+docker compose run --rm worker \
+  node packages/workers/dist/src/cli/embeddings-backfill.js \
+  --batch-size 16 --limit 100
+```
+
+The CLI uses cursor pagination, bounded inference batches, three bounded
+attempts, a per-Chunk fallback after a failed batch, and a content-hash
+condition on update. It never overwrites a newer Chunk after concurrent
+content change and is safe to resume. The final summary includes inspected,
+embedded, skipped, and failed Chunks, completed batches, and elapsed time.
+
+`MODEL_CACHE_DIR` is explicit. Compose mounts the persistent `model-cache`
+volume at `/models/cache` into both API and worker containers, so query and
+backfill processes reuse downloaded files. `EMBEDDING_BATCH_SIZE` defaults to
+16 (maximum 64), and `EMBEDDING_ALLOW_REMOTE_MODELS=false` forces cache-only
+startup. The API loads the model only on the first semantic query; crawler-only
+worker operation does not initialize it.
+
+The pinned fp32 ONNX weights are about 470 MB, and tokenizer/config files bring
+the first download to roughly 493 MB. Budget approximately 0.7-1.2 GB of
+runtime memory per process that actually loads the model, depending on the
+platform and batch size. First use includes download plus model initialization
+and can take tens of seconds; later starts reuse the volume but still pay model
+initialization time. The 512-token E5 input limit means very long character
+chunks may be token-truncated; the current approximately 1,000-character
+chunker reduces but does not eliminate that risk.
+
+Apply and verify the pgvector migration in Codespaces:
+
+```bash
+docker compose up -d postgres redis
+docker compose run --rm migrate
+docker compose exec postgres \
+  psql -U postgres -d distributed_rag -tAc \
+  "SELECT extversion FROM pg_extension WHERE extname = 'vector';"
+```
+
+The Compose PostgreSQL service uses
+`pgvector/pgvector:0.8.2-pg16-bookworm` and retains the existing
+`postgres-data` volume and database settings.
 
 ## Worker guarantees
 
@@ -273,8 +430,8 @@ controls, or a production security review.
 ```text
 packages/
   api/       Express routes, validation, services, and API tests
-  shared/    Prisma, lazy Redis queue, URL normalization, and job contracts
-  workers/   crawling, rendering, cleaning, chunking, worker, and tests
+  shared/    Prisma, Redis queue, URL contracts, and local embedding provider
+  workers/   crawling, rendering, chunk synchronization, backfills, and tests
 prisma/      schema and committed migration
 .devcontainer/
 .github/workflows/
