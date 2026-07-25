@@ -57,7 +57,10 @@ export async function semanticSearch(
         document."url",
         document."title",
         chunk."chunk_index" AS "chunkIndex",
-        LEFT(chunk."content", ${SEARCH_EXCERPT_LENGTH}) AS "excerpt",
+        LEFT(
+          chunk."content",
+          CAST(${SEARCH_EXCERPT_LENGTH} AS integer)
+        ) AS "excerpt",
         (
           1 - (
             chunk."embedding" <=>
