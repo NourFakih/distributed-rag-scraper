@@ -1,6 +1,8 @@
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 
+const runIntegrationTests = process.env.RUN_INTEGRATION_TESTS === "true";
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -11,6 +13,7 @@ export default defineConfig({
     },
   },
   test: {
+    fileParallelism: !runIntegrationTests,
     environment: "node",
     include: ["packages/**/tests/**/*.test.{ts,tsx}"],
     coverage: {

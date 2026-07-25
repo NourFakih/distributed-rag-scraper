@@ -10,3 +10,6 @@ coverage/
 .idea/
 .vscode/
 
+
+# Local Hugging Face model cache
+.cache/huggingface/
