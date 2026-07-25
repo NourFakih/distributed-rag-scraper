@@ -1,0 +1,18 @@
+10-Page Crawl Test
+==================
+Status: COMPLETED
+Discovered: 10
+Completed: 10
+Skipped: 0
+Failed: 0
+
+0 | COMPLETED | https://books.toscrape.com/
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books/travel_2/index.html
+1 | COMPLETED | https://books.toscrape.com/index.html
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books/sequential-art_5/index.html
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books/philosophy_7/index.html
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books/mystery_3/index.html
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books_1/index.html
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books/classics_6/index.html
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books/romance_8/index.html
+1 | COMPLETED | https://books.toscrape.com/catalogue/category/books/historical-fiction_4/index.html

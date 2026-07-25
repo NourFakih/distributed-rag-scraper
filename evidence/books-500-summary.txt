@@ -1,0 +1,23 @@
+500-Page Crawl Experiment
+=========================
+Target: https://books.toscrape.com/
+Render mode: STATIC
+Status: COMPLETED
+Maximum pages: 500
+Maximum depth: 4
+Discovered: 500
+Completed: 500
+Skipped: 0
+Failed: 0
+Page records: 500
+Dead letters: 0
+Duration seconds: 500.018
+Completed pages per second: 1.000
+
+Pages by depth:
+Depth 0: 1
+Depth 1: 73
+Depth 2: 426
+
+Pages by status:
+COMPLETED: 500

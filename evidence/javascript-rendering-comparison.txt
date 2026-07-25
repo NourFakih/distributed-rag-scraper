@@ -1,0 +1,21 @@
+JavaScript Rendering Comparison
+===============================
+
+Target URL: https://quotes.toscrape.com/js/
+
+STATIC
+Raw HTML length: 5806
+Cleaned content length: 22
+Preview: Quotes to Scrape
+Login
+
+JAVASCRIPT
+Raw HTML length: 8940
+Cleaned content length: 1423
+Preview: Quotes to Scrape
+Login
+“The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking.”by Albert EinsteinTags: change deep-thoughts thinking world
+“It is our choices, Harry, that show what we truly are, far more than our abilities.”by J.K. RowlingTags: abilities choices
+“There are only two ways to live your life. One is as though nothing is a miracle. The other is as though everything is a miracle.”by Albert EinsteinTags: inspirational life live
+
+Content increase: 1401 characters
