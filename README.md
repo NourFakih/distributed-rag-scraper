@@ -28,10 +28,10 @@ POST /api/crawls
   -> aggregate crawl/page/document/dead-letter APIs
 ```
 
-Each crawl defaults to static rendering, at most 25 pages, and depth 2. Stage
-5C adds one cited question-answering endpoint. React, reranking, hybrid search,
-claim-level verification, performance experiments, and the 500-page crawl
-remain later phases.
+Each crawl defaults to static rendering, at most 25 pages, and depth 2. The
+React dashboard provides crawl control, semantic and keyword search, and cited
+question answering. Reranking, hybrid search, claim-level verification,
+performance experiments, and the 500-page crawl remain later phases.
 
 ## Stack
 
@@ -43,6 +43,8 @@ remain later phases.
 - Environment-configured OpenAI-compatible chat completions
 - Axios and Cheerio
 - Playwright 1.61.1 with Chromium only
+- React 19, TypeScript, and Vite 8
+- Nginx for the production dashboard and same-origin API proxy
 - Vitest and Supertest
 - Docker Compose in GitHub Codespaces
 - GitHub Actions for quality checks and separate image builds
@@ -51,13 +53,20 @@ remain later phases.
 
 1. Open the repository in a new Codespace. The devcontainer installs npm
    dependencies and generates Prisma Client.
-2. Start the complete stack:
+2. Configure `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in `.env` when
+   grounded generation should call a live provider, then start the complete
+   stack:
 
    ```bash
    docker compose up --build
    ```
 
-3. In a second terminal, submit a safe static page:
+3. Open the dashboard at <http://localhost:4173>. Its Overview section reports
+   API health. Use Crawl to submit or inspect a run, Search to switch between
+   semantic and keyword retrieval, and Ask to request a cited grounded answer.
+
+4. The same operations remain available from a second terminal. Submit a safe
+   static page:
 
    ```bash
    curl -i \
@@ -66,19 +75,19 @@ remain later phases.
      http://localhost:3000/api/crawls
    ```
 
-4. Copy the returned Crawl UUID and inspect it:
+5. Copy the returned Crawl UUID and inspect it:
 
    ```bash
    curl http://localhost:3000/api/crawls/COPY_CRAWL_ID_HERE
    ```
 
-5. Inspect every page in the bounded run:
+6. Inspect every page in the bounded run:
 
    ```bash
    curl "http://localhost:3000/api/crawls/COPY_CRAWL_ID_HERE/pages?page=1&pageSize=25"
    ```
 
-6. After the status becomes `COMPLETED`, copy a `documentId`:
+7. After the status becomes `COMPLETED`, copy a `documentId`:
 
    ```bash
    curl http://localhost:3000/api/documents/COPY_DOCUMENT_ID_HERE
@@ -135,6 +144,33 @@ credentials and is also excluded from normal CI:
 ```bash
 npm run test:llm
 ```
+
+## Web dashboard development
+
+The frontend lives in `packages/web`. For local Vite development, copy
+`.env.example` to `.env` if needed and leave `VITE_API_BASE_URL` empty to use
+Vite's same-origin proxy to the API on port 3000, then run:
+
+```bash
+npm run dev --workspace @distributed-rag/web
+```
+
+Open <http://localhost:5173>. If the frontend is hosted separately behind a
+CORS-capable API deployment, set `VITE_API_BASE_URL` to that API origin before
+building. When the variable is absent entirely, the typed client defaults to
+`http://localhost:3000`; the committed empty value is recommended for local
+Vite and Compose because both provide an API proxy.
+
+The production dashboard is built and served by the `web` Compose service on
+<http://localhost:4173>. Its Nginx configuration proxies `/api` and `/health`
+to the existing API container, so no backend CORS change is required.
+
+Basic workflow:
+
+1. Submit a bounded crawl and wait for a terminal status.
+2. Search completed documents using semantic or keyword mode.
+3. Ask a question; configure an LLM provider first for grounded generation.
+   Insufficient retrieval evidence is displayed without calling the provider.
 
 ## API contract
 
@@ -569,6 +605,7 @@ packages/
   api/       Express routes, semantic retrieval, grounded generation, and tests
   shared/    Prisma, Redis queue, URL contracts, and local embedding provider
   workers/   crawling, rendering, chunk synchronization, backfills, and tests
+  web/       React/Vite dashboard, typed API client, Nginx image, and UI tests
 prisma/      schema and committed migration
 .devcontainer/
 .github/workflows/

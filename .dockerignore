@@ -14,5 +14,6 @@ models
 **/*.log
 **/tests
 **/*.test.ts
+**/*.test.tsx
 README.md
 rag_assignment.txt

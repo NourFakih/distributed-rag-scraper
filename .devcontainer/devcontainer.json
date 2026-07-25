@@ -9,11 +9,21 @@
   },
   "postCreateCommand": "bash -lc 'if [ ! -f .env ]; then cp .env.example .env; fi && npm ci && npm run prisma:generate && npx playwright install --with-deps chromium'",
   "forwardPorts": [
-    3000
+    3000,
+    4173,
+    5173
   ],
   "portsAttributes": {
     "3000": {
       "label": "Express API",
+      "onAutoForward": "notify"
+    },
+    "4173": {
+      "label": "Web dashboard (Compose)",
+      "onAutoForward": "openBrowser"
+    },
+    "5173": {
+      "label": "Web dashboard (Vite)",
       "onAutoForward": "notify"
     }
   },
