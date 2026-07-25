@@ -22,12 +22,16 @@ POST /api/crawls
   -> local multilingual E5 passage embeddings
   -> PostgreSQL pgvector cosine index
   -> semantic-search API
+  -> similarity threshold + bounded untrusted source context
+  -> OpenAI-compatible grounded generation
+  -> validated numbered citations
   -> aggregate crawl/page/document/dead-letter APIs
 ```
 
-Each run defaults to static rendering, at most 25 pages, and depth 2. LLM
-answer generation, cited RAG answers, React, reranking, hybrid search,
-performance experiments, and the 500-page crawl remain later phases.
+Each crawl defaults to static rendering, at most 25 pages, and depth 2. Stage
+5C adds one cited question-answering endpoint. React, reranking, hybrid search,
+claim-level verification, performance experiments, and the 500-page crawl
+remain later phases.
 
 ## Stack
 
@@ -36,6 +40,7 @@ performance experiments, and the 500-page crawl remain later phases.
 - BullMQ and Redis
 - PostgreSQL 16, pgvector 0.8.2, and Prisma 6.19.3
 - Transformers.js 4.2.0 and `intfloat/multilingual-e5-small`
+- Environment-configured OpenAI-compatible chat completions
 - Axios and Cheerio
 - Playwright 1.61.1 with Chromium only
 - Vitest and Supertest
@@ -122,6 +127,13 @@ The optional real-model smoke test downloads and executes the pinned model:
 
 ```bash
 npm run test:model
+```
+
+The optional live generation smoke test requires explicitly supplied LLM
+credentials and is also excluded from normal CI:
+
+```bash
+npm run test:llm
 ```
 
 ## API contract
@@ -217,6 +229,103 @@ Example response:
 
 The API never returns raw vectors. An empty or not-yet-embedded index is not an
 error: it returns HTTP 200, `resultCount: 0`, and `results: []`.
+
+### `POST /api/ask`
+
+The endpoint trims a required question of at most 2,000 characters. `limit`
+defaults to 5 and accepts integers from 1 through 10:
+
+```bash
+curl -X POST http://localhost:3000/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What information does the indexed site provide about book prices?","limit":5}'
+```
+
+It calls the existing semantic-search service with the question, filters
+results below `RAG_MIN_SIMILARITY`, builds bounded numbered sources, and then
+calls the configured generator. A successful response is:
+
+```json
+{
+  "question": "What information does the indexed site provide about book prices?",
+  "answer": "The indexed listing displays book prices beside each title [1].",
+  "grounded": true,
+  "model": {
+    "provider": "openai-compatible",
+    "model": "configured-model-name"
+  },
+  "retrieval": {
+    "requestedLimit": 5,
+    "resultCount": 1
+  },
+  "citations": [
+    {
+      "number": 1,
+      "chunkId": "CHUNK_UUID",
+      "documentId": "DOCUMENT_UUID",
+      "chunkIndex": 0,
+      "url": "https://example.com/books",
+      "title": "Books",
+      "excerpt": "The displayed book price is $10.",
+      "similarity": 0.91
+    }
+  ]
+}
+```
+
+If no result survives the evidence threshold, the LLM is not called and the
+endpoint returns HTTP 200:
+
+```json
+{
+  "question": "What is the company's 2035 revenue forecast?",
+  "answer": "I could not find enough relevant information in the indexed documents to answer this question.",
+  "grounded": false,
+  "model": null,
+  "retrieval": {
+    "requestedLimit": 5,
+    "resultCount": 0
+  },
+  "citations": []
+}
+```
+
+Missing LLM configuration returns controlled HTTP 503 only when usable
+evidence requires generation. Provider timeouts return 504, while provider
+HTTP errors, malformed responses, empty answers, and uncited answers return
+502. API keys, provider bodies, internal prompts, and vectors are never
+returned.
+
+## Grounded generation configuration
+
+The API container alone receives these settings:
+
+```env
+LLM_BASE_URL=https://provider.example/v1
+LLM_API_KEY=
+LLM_MODEL=configured-model-name
+LLM_TIMEOUT_MS=60000
+LLM_MAX_OUTPUT_TOKENS=500
+RAG_MIN_SIMILARITY=0.75
+RAG_MAX_SOURCE_CHARACTERS=1500
+RAG_MAX_CONTEXT_CHARACTERS=8000
+```
+
+`LLM_BASE_URL` is the base before `/chat/completions`. The provider is created
+on the first grounded request and reused in that API process. Requests use
+temperature `0.1`, bounded output tokens, no streaming, no tools, no history,
+and no automatic retry.
+
+The conservative default evidence threshold is `0.75` and may be tuned from
+`-1` through `1` during evaluation. Each retrieved excerpt and the serialized
+source context are bounded independently. Retrieval order is preserved and
+accepted sources receive stable `[1]`, `[2]`, and subsequent numbers.
+
+Model-produced citations are not trusted blindly. Out-of-range numeric markers
+are removed; valid numbers are normalized and deduplicated for the structured
+citations array in their first-appearance order. Only cited sources are
+returned. An answer with no valid citation is rejected rather than presented
+as grounded.
 
 ## Document chunking
 
@@ -425,11 +534,20 @@ the same DNS-rebinding resistance as static mode and must remain private and
 isolated. These controls do not replace authentication, authorization, abuse
 controls, or a production security review.
 
+Retrieved webpage text is untrusted and may contain prompt-injection attempts.
+It is placed only in numbered user-context blocks, while the system instruction
+explicitly forbids following source commands. This separation reduces risk but
+cannot guarantee that every model will ignore every adversarial source.
+Answers are limited to indexed sources, and citations identify the retrieved
+Chunks used by the model; they are not independent verification that every
+claim is true. The project does not yet include reranking, hybrid retrieval, or
+full claim-level citation verification.
+
 ## Repository layout
 
 ```text
 packages/
-  api/       Express routes, validation, services, and API tests
+  api/       Express routes, semantic retrieval, grounded generation, and tests
   shared/    Prisma, Redis queue, URL contracts, and local embedding provider
   workers/   crawling, rendering, chunk synchronization, backfills, and tests
 prisma/      schema and committed migration

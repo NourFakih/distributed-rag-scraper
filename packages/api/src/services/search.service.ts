@@ -11,7 +11,7 @@ import {
 
 export const SEARCH_EXCERPT_LENGTH = 500;
 
-interface SearchRow {
+export interface SemanticSearchResult {
   chunkId: string;
   documentId: string;
   url: string;
@@ -29,7 +29,7 @@ export interface SemanticSearchResponse {
     dimension: number;
   };
   resultCount: number;
-  results: SearchRow[];
+  results: SemanticSearchResult[];
 }
 
 export async function semanticSearch(
@@ -49,7 +49,7 @@ export async function semanticSearch(
       E5_EMBEDDING_DIMENSION,
     ),
   );
-  const rows = await client.$queryRaw<SearchRow[]>(
+  const rows = await client.$queryRaw<SemanticSearchResult[]>(
     Prisma.sql`
       SELECT
         chunk."id" AS "chunkId",
