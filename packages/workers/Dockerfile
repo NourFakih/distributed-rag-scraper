@@ -48,7 +48,7 @@ COPY --from=build --chown=node:node /app/packages/shared/package.json ./packages
 COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build --chown=node:node /app/packages/workers/package.json ./packages/workers/package.json
 COPY --from=build --chown=node:node /app/packages/workers/dist ./packages/workers/dist
-
+COPY --from=build --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
 RUN npx playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright \
     && rm -rf /var/lib/apt/lists/*

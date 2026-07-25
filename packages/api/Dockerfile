@@ -51,6 +51,7 @@ COPY --from=build --chown=node:node /app/packages/shared/package.json ./packages
 COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build --chown=node:node /app/packages/api/package.json ./packages/api/package.json
 COPY --from=build --chown=node:node /app/packages/api/dist ./packages/api/dist
+COPY --from=build --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
 
 USER node
 EXPOSE 3000
