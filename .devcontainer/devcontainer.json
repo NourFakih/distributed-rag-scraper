@@ -27,5 +27,6 @@
       "onAutoForward": "notify"
     }
   },
-  "remoteUser": "node"
+  "remoteUser": "node",
+  "postStartCommand": "bash scripts/start-codespace.sh"
 }
