@@ -70,6 +70,36 @@ crawl's `documentId`, and `GET /api/documents/:id` exposes the stored `etag`,
 then crawl again; the new Document's `previousVersionId` points to the earlier
 version.
 
+## Horizontal scaling experiment
+
+The scaling harness compares the identical concurrent static workload with one
+independent worker process and then three. Build the repository, review the
+workload, and explicitly start the public crawl benchmark:
+
+```bash
+npm run build
+bash scripts/run-scaling-experiment.sh --help
+bash scripts/run-scaling-experiment.sh
+```
+
+By default, each round crawls up to 40 pages from Books to Scrape and 30 pages
+from Quotes to Scrape, with depth 3. Set `SCALING_THIRD_URL` to add an optional
+third origin; its cap and depth default to 30 and 3 and can be changed with
+`SCALING_THIRD_MAX_PAGES` and `SCALING_THIRD_MAX_DEPTH`.
+
+The script requires the existing Compose PostgreSQL and Redis services, but it
+does not stop them or modify the active `distributed_rag` database or Redis DB
+0. Each round recreates only `distributed_rag_scaling`, flushes only Redis DB
+14, applies migrations, and starts a benchmark API on port 3100. This reset
+also prevents incremental document reuse from biasing the three-worker round.
+
+Results are written to `artifacts/scaling-results.md`. Compare completed pages
+per second, duration, speedup, and throughput improvement. Workers share the
+isolated BullMQ queue and PostgreSQL database, while the Redis-backed global
+per-origin limiter and robots.txt rules remain active. Consequently, a small
+speedup can be a valid result when site politeness or network latency—not worker
+capacity—is the bottleneck.
+
 ## Stack
 
 - Node.js 24 LTS, TypeScript, npm workspaces, and Turborepo
