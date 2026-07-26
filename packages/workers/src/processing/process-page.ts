@@ -1,5 +1,10 @@
 import { CrawlFailure } from "../errors/crawl-failure";
 import { cleanHtml } from "./clean-html";
+import {
+  extractStructuredContent,
+  serializeStructuredContent,
+  type StructuredContent,
+} from "./extract-structured-content";
 
 export interface PageSource {
   url: string;
@@ -13,6 +18,7 @@ export interface PageSource {
 
 export interface ProcessedPage extends PageSource {
   content: string;
+  structuredData: StructuredContent;
 }
 
 export function processPageSource(source: PageSource): ProcessedPage {
@@ -24,10 +30,16 @@ export function processPageSource(source: PageSource): ProcessedPage {
       false,
     );
   }
+  const structuredData = extractStructuredContent(source.rawHtml);
+  const serializedStructuredData =
+    serializeStructuredContent(structuredData);
 
   return {
     ...source,
     title: cleaned.title ?? source.title,
-    content: cleaned.content,
+    content: serializedStructuredData
+      ? `${cleaned.content}\n\n${serializedStructuredData}`
+      : cleaned.content,
+    structuredData,
   };
 }

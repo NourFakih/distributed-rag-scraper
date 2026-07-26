@@ -58,6 +58,12 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
   let fixtureBaseUrl: string;
   let workerRuntime: CrawlWorkerRuntime;
   let mutableChunkBody = "";
+  let incrementalVersion = 1;
+  let ignoreIncrementalValidators = false;
+  const incrementalRequests: Array<{
+    etag: string | undefined;
+    lastModified: string | undefined;
+  }> = [];
 
   beforeAll(async () => {
     fixtureServer = createServer((requestMessage, response) => {
@@ -80,6 +86,54 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
           "content-type": "text/html; charset=utf-8",
         });
         response.end("<html><body><main>Try later</main></body></html>");
+        return;
+      }
+
+      if (requestMessage.url === "/incremental") {
+        const etag = `"version-${incrementalVersion}"`;
+        const lastModified =
+          incrementalVersion === 1
+            ? "Sat, 26 Jul 2026 10:00:00 GMT"
+            : "Sat, 26 Jul 2026 11:00:00 GMT";
+        incrementalRequests.push({
+          etag: requestMessage.headers["if-none-match"],
+          lastModified: requestMessage.headers["if-modified-since"],
+        });
+        if (
+          !ignoreIncrementalValidators &&
+          (requestMessage.headers["if-none-match"] === etag ||
+            requestMessage.headers["if-modified-since"] === lastModified)
+        ) {
+          response.writeHead(304, {
+            etag,
+            "last-modified": lastModified,
+          });
+          response.end();
+          return;
+        }
+
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          etag,
+          "last-modified": lastModified,
+        });
+        response.end(`
+          <html><head><title>Incremental fixture</title></head><body><main>
+            <h1>Incremental fixture</h1>
+            <p>Version ${incrementalVersion} content.</p>
+            <a href="/incremental-child">Incremental child</a>
+          </main></body></html>
+        `);
+        return;
+      }
+
+      if (requestMessage.url === "/incremental-child") {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end(
+          "<main><h1>Incremental child</h1><p>Child content.</p></main>",
+        );
         return;
       }
 
@@ -369,6 +423,126 @@ describe.runIf(runIntegrationTests)("static crawl vertical slice", () => {
         ),
       ),
     ).toBe(false);
+  });
+
+  it("reuses unchanged static versions and links changed content", async () => {
+    const incrementalUrl = `${fixtureBaseUrl}/incremental`;
+    const createIncrementalCrawl = async () => {
+      const created = await request(app).post("/api/crawls").send({
+        url: incrementalUrl,
+        maxPages: 2,
+        maxDepth: 1,
+      });
+      return waitForStatus(app, String(created.body.data.id), [
+        "COMPLETED",
+      ]);
+    };
+
+    const first = await createIncrementalCrawl();
+    const firstDocumentId = String(first.data.documentId);
+    const firstDocument = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: firstDocumentId,
+      },
+    });
+    const initialDocumentCount = await prisma.document.count({
+      where: {
+        crawlPage: {
+          normalizedUrl: incrementalUrl,
+        },
+      },
+    });
+    const initialChunkCount = await prisma.chunk.count({
+      where: {
+        documentId: firstDocumentId,
+      },
+    });
+    expect(firstDocument).toMatchObject({
+      etag: '"version-1"',
+      lastModified: "Sat, 26 Jul 2026 10:00:00 GMT",
+      previousVersionId: null,
+    });
+
+    const second = await createIncrementalCrawl();
+    expect(second.data).toMatchObject({
+      documentId: firstDocumentId,
+      notModified: true,
+      reusedDocumentId: firstDocumentId,
+      counters: {
+        discovered: 2,
+        completed: 2,
+      },
+    });
+    expect(incrementalRequests.at(-1)).toEqual({
+      etag: '"version-1"',
+      lastModified: "Sat, 26 Jul 2026 10:00:00 GMT",
+    });
+    await expect(
+      prisma.document.count({
+        where: {
+          crawlPage: {
+            normalizedUrl: incrementalUrl,
+          },
+        },
+      }),
+    ).resolves.toBe(initialDocumentCount);
+    await expect(
+      prisma.chunk.count({
+        where: {
+          documentId: firstDocumentId,
+        },
+      }),
+    ).resolves.toBe(initialChunkCount);
+
+    ignoreIncrementalValidators = true;
+    const hashFallback = await createIncrementalCrawl();
+    expect(hashFallback.data).toMatchObject({
+      documentId: firstDocumentId,
+      notModified: true,
+      reusedDocumentId: firstDocumentId,
+    });
+    await expect(
+      prisma.document.count({
+        where: {
+          crawlPage: {
+            normalizedUrl: incrementalUrl,
+          },
+        },
+      }),
+    ).resolves.toBe(initialDocumentCount);
+
+    ignoreIncrementalValidators = false;
+    incrementalVersion = 2;
+    const changed = await createIncrementalCrawl();
+    const changedDocumentId = String(changed.data.documentId);
+    expect(changedDocumentId).not.toBe(firstDocumentId);
+    expect(changed.data.notModified).toBe(false);
+    await expect(
+      prisma.document.findUniqueOrThrow({
+        where: {
+          id: changedDocumentId,
+        },
+      }),
+    ).resolves.toMatchObject({
+      etag: '"version-2"',
+      previousVersionId: firstDocumentId,
+    });
+    await expect(
+      prisma.document.count({
+        where: {
+          crawlPage: {
+            normalizedUrl: incrementalUrl,
+          },
+        },
+      }),
+    ).resolves.toBe(initialDocumentCount + 1);
+    await expect(
+      prisma.document.findUnique({
+        where: {
+          id: firstDocumentId,
+        },
+      }),
+    ).resolves.not.toBeNull();
   });
 
   it("persists and exposes one dead letter after retry exhaustion", async () => {

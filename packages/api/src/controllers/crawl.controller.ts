@@ -44,6 +44,8 @@ export async function getCrawlController(
 ): Promise<void> {
   const crawl = await getCrawlById(request.params.id!);
   const rootPage = crawl.pages[0] ?? null;
+  const rootDocumentId =
+    rootPage?.document?.id ?? rootPage?.reusedDocumentId ?? null;
 
   response.status(200).json({
     data: {
@@ -66,7 +68,9 @@ export async function getCrawlController(
       attempts: rootPage?.attempts ?? 0,
       errorMessage: rootPage?.error ?? null,
       failureCategory: rootPage?.failureCategory ?? null,
-      documentId: rootPage?.document?.id ?? null,
+      documentId: rootDocumentId,
+      notModified: rootPage?.notModified ?? false,
+      reusedDocumentId: rootPage?.reusedDocumentId ?? null,
       rootPage: rootPage
         ? {
             id: rootPage.id,
@@ -74,7 +78,9 @@ export async function getCrawlController(
             normalizedUrl: rootPage.normalizedUrl,
             status: rootPage.status,
             failureCategory: rootPage.failureCategory,
-            documentId: rootPage.document?.id ?? null,
+            documentId: rootDocumentId,
+            notModified: rootPage.notModified,
+            reusedDocumentId: rootPage.reusedDocumentId,
           }
         : null,
       completedWithFailures:
@@ -106,7 +112,10 @@ export async function getCrawlPagesController(
       attempts: crawlPage.attempts,
       error: crawlPage.error,
       failureCategory: crawlPage.failureCategory,
-      documentId: crawlPage.document?.id ?? null,
+      documentId:
+        crawlPage.document?.id ?? crawlPage.reusedDocumentId ?? null,
+      notModified: crawlPage.notModified,
+      reusedDocumentId: crawlPage.reusedDocumentId,
       createdAt: crawlPage.createdAt,
       startedAt: crawlPage.startedAt,
       completedAt: crawlPage.completedAt,

@@ -86,6 +86,8 @@ function rootPage() {
     attempts: 0,
     error: null,
     failureCategory: null,
+    notModified: false,
+    reusedDocumentId: null,
     createdAt,
     startedAt: null,
     completedAt: null,
@@ -323,6 +325,35 @@ describe("crawl API", () => {
     });
   });
 
+  it("exposes reused document metadata for an unchanged root page", async () => {
+    sharedMocks.crawlFindUnique.mockResolvedValue({
+      ...queuedCrawl(),
+      status: CrawlStatus.COMPLETED,
+      completedCount: 1,
+      pages: [
+        {
+          ...rootPage(),
+          status: CrawlPageStatus.COMPLETED,
+          notModified: true,
+          reusedDocumentId: documentId,
+        },
+      ],
+    });
+
+    const response = await request(app).get(`/api/crawls/${crawlId}`);
+
+    expect(response.body.data).toMatchObject({
+      documentId,
+      notModified: true,
+      reusedDocumentId: documentId,
+      rootPage: {
+        documentId,
+        notModified: true,
+        reusedDocumentId: documentId,
+      },
+    });
+  });
+
   it("returns a paginated page list without raw HTML", async () => {
     sharedMocks.crawlFindUnique.mockResolvedValue({ id: crawlId });
     sharedMocks.crawlPageFindMany.mockResolvedValue([
@@ -347,6 +378,10 @@ describe("crawl API", () => {
       totalPages: 3,
     });
     expect(response.body.data[0]).not.toHaveProperty("rawHtml");
+    expect(response.body.data[0]).toMatchObject({
+      notModified: false,
+      reusedDocumentId: null,
+    });
     expect(sharedMocks.crawlPageFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         skip: 1,

@@ -93,6 +93,33 @@ describe("CrawlerHttpClient", () => {
     });
   });
 
+  it("preserves worker-controlled conditional headers across redirects", async () => {
+    const transport = vi
+      .fn<(configuration: AxiosRequestConfig) => Promise<AxiosResponse<string>>>()
+      .mockResolvedValueOnce(
+        axiosResponse(302, {
+          location: "/final",
+        }),
+      )
+      .mockResolvedValueOnce(axiosResponse(304, {}, ""));
+    const fixture = fixtureClient(transport);
+
+    await fixture.client.request({
+      ...request,
+      requestHeaders: {
+        "If-None-Match": '"version-1"',
+        "If-Modified-Since": "Sat, 26 Jul 2026 10:00:00 GMT",
+      },
+    });
+
+    for (const [configuration] of transport.mock.calls) {
+      expect(configuration.headers).toMatchObject({
+        "If-None-Match": '"version-1"',
+        "If-Modified-Since": "Sat, 26 Jul 2026 10:00:00 GMT",
+      });
+    }
+  });
+
   it("rejects an external redirect before making the next request", async () => {
     const transport = vi.fn().mockResolvedValue(
       axiosResponse(302, {

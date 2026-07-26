@@ -15,7 +15,24 @@ import {
 export const STATIC_FETCH_TIMEOUT_MS = CRAWLER_HTTP_TIMEOUT_MS;
 export const MAX_STATIC_PAGE_BYTES = 2 * 1024 * 1024;
 
-export type StaticPageResult = ProcessedPage;
+export interface ConditionalRequestValidators {
+  etag?: string;
+  lastModified?: string;
+}
+
+interface StaticPageMetadata {
+  etag: string | null;
+  lastModified: string | null;
+  fetchedAt: Date;
+}
+
+export type StaticPageResult =
+  | (ProcessedPage & StaticPageMetadata & { notModified: false })
+  | (StaticPageMetadata & {
+      notModified: true;
+      url: string;
+      httpStatus: 304;
+    });
 
 export class StaticPageScrapeError extends CrawlFailure {
   public constructor(
@@ -35,7 +52,16 @@ export async function scrapeStaticPage(
   checkRedirectPolicy?: (
     url: string,
   ) => Promise<{ allowed: boolean; crawlDelayMs?: number }>,
+  validators?: ConditionalRequestValidators,
 ): Promise<StaticPageResult> {
+  const requestHeaders: Record<string, string> = {};
+  if (validators?.etag) {
+    requestHeaders["If-None-Match"] = validators.etag;
+  }
+  if (validators?.lastModified) {
+    requestHeaders["If-Modified-Since"] = validators.lastModified;
+  }
+
   const response = await client.request({
     url,
     allowedOrigin,
@@ -43,7 +69,21 @@ export async function scrapeStaticPage(
     maxResponseBytes: MAX_STATIC_PAGE_BYTES,
     crawlDelayMs,
     checkRedirectPolicy,
+    requestHeaders,
   });
+  const responseMetadata: StaticPageMetadata = {
+    etag: response.headers.etag ?? null,
+    lastModified: response.headers["last-modified"] ?? null,
+    fetchedAt: new Date(),
+  };
+  if (response.status === 304) {
+    return {
+      notModified: true,
+      url: response.url,
+      httpStatus: 304,
+      ...responseMetadata,
+    };
+  }
   const retryableFailure = retryableHttpFailure(response);
   if (retryableFailure) {
     throw retryableFailure;
@@ -81,13 +121,17 @@ export async function scrapeStaticPage(
     );
   }
 
-  return processPageSource({
-    url: response.url,
-    title: null,
-    rawHtml: response.data,
-    httpStatus: response.status,
-    headers: response.headers,
-    contentType,
-    fetchedAt: new Date(),
-  });
+  return {
+    ...processPageSource({
+      url: response.url,
+      title: null,
+      rawHtml: response.data,
+      httpStatus: response.status,
+      headers: response.headers,
+      contentType,
+      fetchedAt: responseMetadata.fetchedAt,
+    }),
+    notModified: false,
+    ...responseMetadata,
+  };
 }

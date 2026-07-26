@@ -22,9 +22,11 @@ import {
 import { reserveDiscoveredPages } from "../crawl/discover-pages";
 import {
   asCrawlFailure,
+  CrawlFailure,
   RobotsExcludedError,
 } from "../errors/crawl-failure";
 import { calculateContentHash } from "../lib/content-hash";
+import type { ProcessedPage } from "../processing/process-page";
 import {
   getCrawlerServices,
   type CrawlerServices,
@@ -32,6 +34,19 @@ import {
 import { synchronizeDocumentChunks } from "../chunks/synchronize-document-chunks";
 import { discoverLinks } from "../scraping/link-discovery";
 import { scrapeStaticPage } from "../scraping/static-page.scraper";
+
+interface DiscoverySource {
+  rawHtml: string;
+  url: string;
+}
+
+interface DiscoveryContext {
+  crawlPageId: string;
+  crawlId: string;
+  depth: number;
+  maxDepth: number;
+  normalizedOrigin: string;
+}
 
 function isFinalAttempt(
   job: Job<CrawlJobData, CrawlJobResult, CrawlJobName>,
@@ -62,6 +77,112 @@ async function markRobotsSkipped(
   };
 }
 
+async function findPreviousDocument(
+  crawlPageId: string,
+  normalizedUrl: string,
+) {
+  return prisma.document.findFirst({
+    where: {
+      crawlPageId: {
+        not: crawlPageId,
+      },
+      crawlPage: {
+        normalizedUrl,
+      },
+    },
+    orderBy: [
+      {
+        fetchedAt: "desc",
+      },
+      {
+        id: "desc",
+      },
+    ],
+    select: {
+      id: true,
+      url: true,
+      rawHtml: true,
+      contentHash: true,
+      etag: true,
+      lastModified: true,
+    },
+  });
+}
+
+async function discoverAndQueueChildren(
+  context: DiscoveryContext,
+  source: DiscoverySource,
+): Promise<void> {
+  if (context.depth >= context.maxDepth) {
+    return;
+  }
+
+  const candidates = discoverLinks(
+    source.rawHtml,
+    source.url,
+    context.normalizedOrigin,
+  );
+  const discoveredPages = await reserveDiscoveredPages(
+    {
+      id: context.crawlPageId,
+      crawlId: context.crawlId,
+      depth: context.depth,
+    },
+    candidates,
+  );
+
+  for (const discoveredPage of discoveredPages) {
+    await getCrawlQueue().add(
+      SCRAPE_STATIC_PAGE_JOB,
+      {
+        crawlPageId: discoveredPage.id,
+      },
+      {
+        jobId: discoveredPage.id,
+      },
+    );
+    await prisma.crawlPage.updateMany({
+      where: {
+        id: discoveredPage.id,
+        status: CrawlPageStatus.DISCOVERED,
+      },
+      data: {
+        status: CrawlPageStatus.QUEUED,
+      },
+    });
+  }
+}
+
+async function completeWithReusedDocument(
+  context: DiscoveryContext,
+  previousDocument: NonNullable<
+    Awaited<ReturnType<typeof findPreviousDocument>>
+  >,
+): Promise<CrawlJobResult> {
+  await discoverAndQueueChildren(context, previousDocument);
+  await prisma.crawlPage.update({
+    where: {
+      id: context.crawlPageId,
+    },
+    data: {
+      status: CrawlPageStatus.COMPLETED,
+      notModified: true,
+      reusedDocumentId: previousDocument.id,
+      error: null,
+      failureCategory: null,
+      completedAt: new Date(),
+    },
+  });
+  await refreshCrawlState(context.crawlId);
+
+  return {
+    crawlPageId: context.crawlPageId,
+    outcome: "COMPLETED",
+    documentId: previousDocument.id,
+    contentHash: previousDocument.contentHash,
+  };
+}
+
 export async function processCrawlJob(
   job: Job<CrawlJobData, CrawlJobResult, CrawlJobName>,
 ): Promise<CrawlJobResult> {
@@ -85,6 +206,7 @@ export async function processCrawlJobWithServices(
     include: {
       crawl: true,
       document: true,
+      reusedDocument: true,
       deadLetter: true,
     },
   });
@@ -93,16 +215,18 @@ export async function processCrawlJobWithServices(
     throw new UnrecoverableError(`CrawlPage ${crawlPageId} does not exist`);
   }
 
+  const completedDocument =
+    crawlPage.document ?? crawlPage.reusedDocument;
   if (
     crawlPage.status === CrawlPageStatus.COMPLETED &&
-    crawlPage.document
+    completedDocument
   ) {
     await refreshCrawlState(crawlPage.crawlId);
     return {
       crawlPageId,
       outcome: "COMPLETED",
-      documentId: crawlPage.document.id,
-      contentHash: crawlPage.document.contentHash,
+      documentId: completedDocument.id,
+      contentHash: completedDocument.contentHash,
     };
   }
   if (crawlPage.status === CrawlPageStatus.SKIPPED_ROBOTS) {
@@ -157,25 +281,76 @@ export async function processCrawlJobWithServices(
       return markRobotsSkipped(crawlPageId, crawlPage.crawlId);
     }
 
-    const page =
-      crawlPage.crawl.renderMode === RenderMode.JAVASCRIPT
-        ? await services.javascriptRenderer.render({
-            url: crawlPage.url,
-            allowedOrigin: crawlPage.crawl.normalizedOrigin,
-            crawlDelayMs: robotsDecision.crawlDelayMs,
-          })
-        : await scrapeStaticPage(
-            crawlPage.url,
+    const discoveryContext: DiscoveryContext = {
+      crawlPageId: crawlPage.id,
+      crawlId: crawlPage.crawlId,
+      depth: crawlPage.depth,
+      maxDepth: crawlPage.crawl.maxDepth,
+      normalizedOrigin: crawlPage.crawl.normalizedOrigin,
+    };
+    let page: ProcessedPage;
+    let etag: string | null = null;
+    let lastModified: string | null = null;
+    let previousDocument: Awaited<
+      ReturnType<typeof findPreviousDocument>
+    > = null;
+
+    if (crawlPage.crawl.renderMode === RenderMode.JAVASCRIPT) {
+      page = await services.javascriptRenderer.render({
+        url: crawlPage.url,
+        allowedOrigin: crawlPage.crawl.normalizedOrigin,
+        crawlDelayMs: robotsDecision.crawlDelayMs,
+      });
+    } else {
+      previousDocument = await findPreviousDocument(
+        crawlPage.id,
+        crawlPage.normalizedUrl,
+      );
+      const staticPage = await scrapeStaticPage(
+        crawlPage.url,
+        crawlPage.crawl.normalizedOrigin,
+        services.httpClient,
+        robotsDecision.crawlDelayMs,
+        (redirectUrl) =>
+          services.robotsService.check(
+            redirectUrl,
             crawlPage.crawl.normalizedOrigin,
-            services.httpClient,
-            robotsDecision.crawlDelayMs,
-            (redirectUrl) =>
-              services.robotsService.check(
-                redirectUrl,
-                crawlPage.crawl.normalizedOrigin,
-              ),
+          ),
+        {
+          etag: previousDocument?.etag ?? undefined,
+          lastModified: previousDocument?.lastModified ?? undefined,
+        },
+      );
+
+      if (staticPage.notModified) {
+        if (!previousDocument) {
+          throw new CrawlFailure(
+            "HTTP_PERMANENT",
+            "Static page returned HTTP 304 without a previous document",
+            false,
           );
+        }
+        return await completeWithReusedDocument(
+          discoveryContext,
+          previousDocument,
+        );
+      }
+
+      page = staticPage;
+      etag = staticPage.etag;
+      lastModified = staticPage.lastModified;
+    }
     const contentHash = calculateContentHash(page.content);
+
+    if (
+      previousDocument &&
+      previousDocument.contentHash === contentHash
+    ) {
+      return await completeWithReusedDocument(
+        discoveryContext,
+        previousDocument,
+      );
+    }
 
     const document = await prisma.$transaction(async (transaction) => {
       const persistedDocument = await transaction.document.upsert({
@@ -188,7 +363,11 @@ export async function processCrawlJobWithServices(
           title: page.title,
           rawHtml: page.rawHtml,
           content: page.content,
+          structuredData: page.structuredData,
           contentHash,
+          etag,
+          lastModified,
+          previousVersionId: previousDocument?.id ?? null,
           httpStatus: page.httpStatus,
           contentType: page.contentType,
           fetchedAt: page.fetchedAt,
@@ -198,7 +377,11 @@ export async function processCrawlJobWithServices(
           title: page.title,
           rawHtml: page.rawHtml,
           content: page.content,
+          structuredData: page.structuredData,
           contentHash,
+          etag,
+          lastModified,
+          previousVersionId: previousDocument?.id ?? null,
           httpStatus: page.httpStatus,
           contentType: page.contentType,
           fetchedAt: page.fetchedAt,
@@ -214,42 +397,7 @@ export async function processCrawlJobWithServices(
       return persistedDocument;
     });
 
-    if (crawlPage.depth < crawlPage.crawl.maxDepth) {
-      const candidates = discoverLinks(
-        page.rawHtml,
-        page.url,
-        crawlPage.crawl.normalizedOrigin,
-      );
-      const discoveredPages = await reserveDiscoveredPages(
-        {
-          id: crawlPage.id,
-          crawlId: crawlPage.crawlId,
-          depth: crawlPage.depth,
-        },
-        candidates,
-      );
-
-      for (const discoveredPage of discoveredPages) {
-        await getCrawlQueue().add(
-          SCRAPE_STATIC_PAGE_JOB,
-          {
-            crawlPageId: discoveredPage.id,
-          },
-          {
-            jobId: discoveredPage.id,
-          },
-        );
-        await prisma.crawlPage.updateMany({
-          where: {
-            id: discoveredPage.id,
-            status: CrawlPageStatus.DISCOVERED,
-          },
-          data: {
-            status: CrawlPageStatus.QUEUED,
-          },
-        });
-      }
-    }
+    await discoverAndQueueChildren(discoveryContext, page);
 
     await prisma.crawlPage.update({
       where: {
@@ -257,6 +405,8 @@ export async function processCrawlJobWithServices(
       },
       data: {
         status: CrawlPageStatus.COMPLETED,
+        notModified: false,
+        reusedDocumentId: null,
         error: null,
         failureCategory: null,
         completedAt: new Date(),

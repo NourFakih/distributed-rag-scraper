@@ -36,6 +36,7 @@ export interface CrawlerHttpRequest {
   accept: string;
   maxResponseBytes: number;
   crawlDelayMs?: number;
+  requestHeaders?: Readonly<Record<string, string>>;
   checkRedirectPolicy?: (
     url: string,
   ) => Promise<{ allowed: boolean; crawlDelayMs?: number }>;
@@ -246,6 +247,7 @@ export class CrawlerHttpClient {
           httpAgent,
           httpsAgent,
           headers: {
+            ...request.requestHeaders,
             Accept: request.accept,
             "User-Agent": this.config.userAgent,
           },

@@ -35,10 +35,17 @@ describe("scrapeStaticPage", () => {
     const result = await scrapeStaticPage(
       "https://fixture.test/page",
       "https://fixture.test",
-      clientReturning({}),
+      clientReturning({
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          etag: '"version-1"',
+          "last-modified": "Sat, 26 Jul 2026 10:00:00 GMT",
+        },
+      }),
     );
 
     expect(result.title).toBe("Deterministic Crawl Fixture");
+    expect(result.notModified).toBe(false);
     expect(result.rawHtml).toBe(FIXTURE_HTML);
     expect(result.content).toBe(EXPECTED_FIXTURE_CONTENT);
     expect(result.httpStatus).toBe(200);
@@ -46,7 +53,50 @@ describe("scrapeStaticPage", () => {
       "text/html; charset=utf-8",
     );
     expect(result.contentType).toBe("text/html; charset=utf-8");
+    expect(result.etag).toBe('"version-1"');
+    expect(result.lastModified).toBe(
+      "Sat, 26 Jul 2026 10:00:00 GMT",
+    );
     expect(result.fetchedAt).toBeInstanceOf(Date);
+  });
+
+  it("sends validators and returns HTTP 304 without processing HTML", async () => {
+    const client = clientReturning({
+      status: 304,
+      data: "",
+      headers: {
+        etag: '"version-1"',
+        "last-modified": "Sat, 26 Jul 2026 10:00:00 GMT",
+      },
+    });
+
+    const result = await scrapeStaticPage(
+      "https://fixture.test/page",
+      "https://fixture.test",
+      client,
+      undefined,
+      undefined,
+      {
+        etag: '"version-1"',
+        lastModified: "Sat, 26 Jul 2026 10:00:00 GMT",
+      },
+    );
+
+    expect(result).toMatchObject({
+      notModified: true,
+      httpStatus: 304,
+      etag: '"version-1"',
+      lastModified: "Sat, 26 Jul 2026 10:00:00 GMT",
+    });
+    expect(client.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestHeaders: {
+          "If-None-Match": '"version-1"',
+          "If-Modified-Since": "Sat, 26 Jul 2026 10:00:00 GMT",
+        },
+      }),
+    );
+    expect(result).not.toHaveProperty("content");
   });
 
   it("rejects a non-HTML response", async () => {

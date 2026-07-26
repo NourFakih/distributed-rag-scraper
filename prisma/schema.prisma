@@ -55,28 +55,32 @@ model Crawl {
 }
 
 model CrawlPage {
-  id              String          @id @default(uuid()) @db.Uuid
-  crawlId         String          @map("crawl_id") @db.Uuid
-  url             String          @db.VarChar(2048)
-  normalizedUrl   String          @map("normalized_url") @db.VarChar(2048)
-  depth           Int
-  parentPageId    String?         @map("parent_page_id") @db.Uuid
-  status          CrawlPageStatus @default(DISCOVERED)
-  attempts        Int             @default(0)
-  error           String?         @db.Text
-  failureCategory String?         @map("failure_category") @db.VarChar(64)
-  createdAt       DateTime        @default(now()) @map("created_at")
-  startedAt       DateTime?       @map("started_at")
-  completedAt     DateTime?       @map("completed_at")
-  crawl           Crawl           @relation(fields: [crawlId], references: [id], onDelete: Cascade)
-  parentPage      CrawlPage?      @relation("CrawlPageChildren", fields: [parentPageId], references: [id], onDelete: SetNull)
-  childPages      CrawlPage[]     @relation("CrawlPageChildren")
-  document        Document?
-  deadLetter      DeadLetter?
+  id               String          @id @default(uuid()) @db.Uuid
+  crawlId          String          @map("crawl_id") @db.Uuid
+  url              String          @db.VarChar(2048)
+  normalizedUrl    String          @map("normalized_url") @db.VarChar(2048)
+  depth            Int
+  parentPageId     String?         @map("parent_page_id") @db.Uuid
+  status           CrawlPageStatus @default(DISCOVERED)
+  attempts         Int             @default(0)
+  error            String?         @db.Text
+  failureCategory  String?         @map("failure_category") @db.VarChar(64)
+  notModified      Boolean         @default(false) @map("not_modified")
+  reusedDocumentId String?         @map("reused_document_id") @db.Uuid
+  createdAt        DateTime        @default(now()) @map("created_at")
+  startedAt        DateTime?       @map("started_at")
+  completedAt      DateTime?       @map("completed_at")
+  crawl            Crawl           @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+  parentPage       CrawlPage?      @relation("CrawlPageChildren", fields: [parentPageId], references: [id], onDelete: SetNull)
+  childPages       CrawlPage[]     @relation("CrawlPageChildren")
+  document         Document?       @relation("CreatedDocument")
+  reusedDocument   Document?       @relation("ReusedDocument", fields: [reusedDocumentId], references: [id], onDelete: SetNull)
+  deadLetter       DeadLetter?
 
   @@unique([crawlId, normalizedUrl])
   @@index([crawlId, status])
   @@index([parentPageId])
+  @@index([reusedDocumentId])
   @@map("crawl_pages")
 }
 
@@ -99,21 +103,29 @@ model DeadLetter {
 }
 
 model Document {
-  id          String    @id @default(uuid()) @db.Uuid
-  crawlPageId String    @unique @map("crawl_page_id") @db.Uuid
-  url         String    @db.VarChar(2048)
-  title       String?   @db.Text
-  rawHtml     String    @map("raw_html") @db.Text
-  content     String    @db.Text
-  contentHash String    @map("content_hash") @db.Char(64)
-  httpStatus  Int       @map("http_status")
-  contentType String?   @map("content_type") @db.VarChar(255)
-  fetchedAt   DateTime  @default(now()) @map("fetched_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  crawlPage   CrawlPage @relation(fields: [crawlPageId], references: [id], onDelete: Cascade)
-  chunks      Chunk[]
+  id                String      @id @default(uuid()) @db.Uuid
+  crawlPageId       String      @unique @map("crawl_page_id") @db.Uuid
+  url               String      @db.VarChar(2048)
+  title             String?     @db.Text
+  rawHtml           String      @map("raw_html") @db.Text
+  content           String      @db.Text
+  structuredData    Json?       @map("structured_data")
+  contentHash       String      @map("content_hash") @db.Char(64)
+  httpStatus        Int         @map("http_status")
+  contentType       String?     @map("content_type") @db.VarChar(255)
+  etag              String?     @db.Text
+  lastModified      String?     @map("last_modified") @db.Text
+  previousVersionId String?     @map("previous_version_id") @db.Uuid
+  fetchedAt         DateTime    @default(now()) @map("fetched_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  crawlPage         CrawlPage   @relation("CreatedDocument", fields: [crawlPageId], references: [id], onDelete: Cascade)
+  reusedByPages     CrawlPage[] @relation("ReusedDocument")
+  previousVersion   Document?   @relation("DocumentVersions", fields: [previousVersionId], references: [id], onDelete: SetNull)
+  nextVersions      Document[]  @relation("DocumentVersions")
+  chunks            Chunk[]
 
   @@index([contentHash])
+  @@index([previousVersionId])
   @@map("documents")
 }
 

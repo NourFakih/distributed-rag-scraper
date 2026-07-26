@@ -12,12 +12,13 @@ POST /api/crawls
   -> global Redis request-start limiter
   -> DNS/IP and redirect validation
   -> STATIC: safe Axios fetch
+     -> previous-version lookup + conditional HTTP validators
      or JAVASCRIPT: reusable Playwright Chromium
   -> shared Cheerio extraction and cleaning
   -> same-origin link discovery
   -> bounded child CrawlPage jobs
   -> normalized content + SHA-256
-  -> one PostgreSQL Document per CrawlPage
+  -> new Document version or unchanged Document reuse
   -> deterministic overlapping Chunk rows per Document
   -> local multilingual E5 passage embeddings
   -> PostgreSQL pgvector cosine index
@@ -32,6 +33,42 @@ Each crawl defaults to static rendering, at most 25 pages, and depth 2. The
 React dashboard provides crawl control, semantic and keyword search, and cited
 question answering. Reranking, hybrid search, claim-level verification,
 performance experiments, and the 500-page crawl remain later phases.
+
+## Extracted content
+
+HTML pages retain normalized readable body text and structured table data.
+Extracted tables are stored on each Document as validated JSON, while a bounded,
+readable serialization is appended to indexed content so table values work with
+the existing chunking, semantic search, keyword search, and Ask pipeline. To
+avoid oversized extraction, each page is limited to 20 tables, each table to 200
+rows, each row to 30 cells, and each cell to 1,000 characters. PDF, spreadsheet,
+and image extraction are not supported.
+
+## Incremental static recrawling
+
+Before a static fetch, the worker looks up the newest Document created for the
+same normalized URL by an earlier CrawlPage. When that Document has an ETag or
+Last-Modified value, the worker sends `If-None-Match` or `If-Modified-Since` on
+the safe same-origin request and its redirects. A `304 Not Modified` response
+reuses the previous Document and chunks, marks the new CrawlPage with
+`notModified: true` and `reusedDocumentId`, and still discovers child links from
+the previous raw HTML so bounded multipage traversal continues.
+
+If a server omits or ignores validators and returns `200`, the worker compares
+the normalized indexed content using its SHA-256 hash. An identical hash uses
+the same reuse path without duplicating Documents or chunks. Changed content
+creates a new Document and chunks, stores the latest ETag and Last-Modified
+values, and links the new version through `previousVersionId`; older versions
+remain addressable by their Document IDs. Conditional requests are currently
+limited to `STATIC` crawls. JavaScript crawls continue to render normally.
+
+To demonstrate reuse, submit the same validator-enabled URL twice in `STATIC`
+mode and wait for both crawls to complete. The second `GET /api/crawls/:id`
+response reports `notModified: true`, its `reusedDocumentId` matches the first
+crawl's `documentId`, and `GET /api/documents/:id` exposes the stored `etag`,
+`lastModified`, and version metadata. Change the served HTML and validator,
+then crawl again; the new Document's `previousVersionId` points to the earlier
+version.
 
 ## Stack
 
@@ -199,13 +236,15 @@ root queueing fails, it marks the run failed and returns `503`.
 
 Returns the aggregate run status, render mode, limits, counters, root
 page/document information, timestamps, and whether completion included
-child-page failures. Invalid UUIDs return `422`; unknown UUIDs return `404`.
+child-page failures. An unchanged recrawl also returns `notModified` and
+`reusedDocumentId`. Invalid UUIDs return `422`; unknown UUIDs return `404`.
 
 ### `GET /api/crawls/:id/pages`
 
 Returns CrawlPage metadata without raw HTML. `page` defaults to 1 and `pageSize`
 defaults to 25 with a maximum of 100. Each result includes depth, parent,
 status, attempts, bounded error, timestamps, and optional `documentId`.
+Unchanged pages include `notModified: true` and the reused Document ID.
 
 ### `GET /api/crawls/:id/dead-letters`
 
@@ -222,8 +261,9 @@ stage.
 ### `GET /api/documents/:id`
 
 Returns the owning Crawl/CrawlPage IDs, source URL, title, raw HTML, normalized
-content, lowercase SHA-256, HTTP metadata, and timestamps. Invalid UUIDs return
-`422`; unknown UUIDs return `404`.
+content, structured HTML tables, lowercase SHA-256, HTTP metadata, and
+timestamps. Version metadata includes `etag`, `lastModified`, and
+`previousVersionId`. Invalid UUIDs return `422`; unknown UUIDs return `404`.
 
 ### `GET /api/search`
 

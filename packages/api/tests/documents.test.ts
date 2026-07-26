@@ -33,8 +33,20 @@ describe("document API", () => {
       title: "Fixture",
       rawHtml: "<main><p>Fixture content</p></main>",
       content: "Fixture content",
+      structuredData: {
+        tables: [
+          {
+            caption: "Available books",
+            headers: ["Title", "Price"],
+            rows: [["Security Engineering", "$45"]],
+          },
+        ],
+      },
       contentHash:
         "20aa0fc8b31ef2e4d79f7df96534d4a8d3cf181ddf736e74febf429425f005cd",
+      etag: '"version-2"',
+      lastModified: "Sat, 26 Jul 2026 11:00:00 GMT",
+      previousVersionId: "4c6414e9-342d-4f18-a168-edcf90f8db79",
       httpStatus: 200,
       contentType: "text/html; charset=utf-8",
       fetchedAt: timestamp,
@@ -55,7 +67,19 @@ describe("document API", () => {
       crawlPageId,
       rawHtml: "<main><p>Fixture content</p></main>",
       content: "Fixture content",
+      structuredData: {
+        tables: [
+          {
+            caption: "Available books",
+            headers: ["Title", "Price"],
+            rows: [["Security Engineering", "$45"]],
+          },
+        ],
+      },
       httpStatus: 200,
+      etag: '"version-2"',
+      lastModified: "Sat, 26 Jul 2026 11:00:00 GMT",
+      previousVersionId: "4c6414e9-342d-4f18-a168-edcf90f8db79",
     });
     expect(response.body.data.contentHash).toHaveLength(64);
   });

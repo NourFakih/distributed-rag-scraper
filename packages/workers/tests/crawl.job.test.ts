@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   crawlPageUpdate: vi.fn(),
   crawlPageUpdateMany: vi.fn(),
   crawlUpdate: vi.fn(),
+  documentFindFirst: vi.fn(),
   documentUpsert: vi.fn(),
   chunkFindMany: vi.fn(),
   chunkDeleteMany: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock("@distributed-rag/shared", async () => {
         update: mocks.crawlUpdate,
       },
       document: {
+        findFirst: mocks.documentFindFirst,
         upsert: mocks.documentUpsert,
       },
       chunk: {
@@ -110,8 +112,21 @@ const crawlId = "9bed41b1-e380-4eec-906e-c56cb52cfe72";
 const crawlPageId = "0e784632-c9e6-4b9d-afd2-8820eecb428b";
 const childPageId = "a974d4a7-0cf7-461f-a78c-ef2a12e068a5";
 const documentId = "73e9e18c-6074-449f-ad3c-ca333c0e9483";
+const previousDocumentId = "4c6414e9-342d-4f18-a168-edcf90f8db79";
 const pageUrl = "https://example.com/page";
 const content = "Deterministic content";
+const structuredData = { tables: [] };
+const lastModified = "Sat, 26 Jul 2026 10:00:00 GMT";
+
+const previousDocument = {
+  id: previousDocumentId,
+  url: pageUrl,
+  rawHtml:
+    '<main>Deterministic content<a href="/child">Child</a></main>',
+  contentHash: calculateContentHash(content),
+  etag: '"version-1"',
+  lastModified,
+};
 
 function createJob(attemptsMade = 0): Job<
   CrawlJobData,
@@ -149,6 +164,9 @@ function crawlPageRecord(
     completedAt: null,
     createdAt: new Date(),
     document,
+    reusedDocument: null,
+    notModified: false,
+    reusedDocumentId: null,
     deadLetter: null,
     crawl: {
       id: crawlId,
@@ -165,11 +183,16 @@ describe("processCrawlJob", () => {
     mocks.crawlPageUpdate.mockResolvedValue(crawlPageRecord());
     mocks.crawlPageUpdateMany.mockResolvedValue({ count: 1 });
     mocks.crawlUpdate.mockResolvedValue({});
+    mocks.documentFindFirst.mockResolvedValue(null);
     mocks.scrapeStaticPage.mockResolvedValue({
+      notModified: false,
       url: pageUrl,
       title: "Fixture",
       rawHtml: "<main>Deterministic content</main>",
       content,
+      structuredData,
+      etag: '"version-1"',
+      lastModified,
       httpStatus: 200,
       contentType: "text/html",
       fetchedAt: new Date("2026-07-24T10:00:00.000Z"),
@@ -179,6 +202,7 @@ describe("processCrawlJob", () => {
       title: "Rendered fixture",
       rawHtml: "<main>Deterministic content</main>",
       content,
+      structuredData,
       httpStatus: 200,
       contentType: "text/html",
       fetchedAt: new Date("2026-07-24T10:00:00.000Z"),
@@ -267,6 +291,36 @@ describe("processCrawlJob", () => {
         where: {
           crawlPageId,
         },
+        create: expect.objectContaining({ structuredData }),
+        update: expect.objectContaining({ structuredData }),
+      }),
+    );
+    expect(mocks.documentFindFirst).toHaveBeenCalledWith({
+      where: {
+        crawlPageId: {
+          not: crawlPageId,
+        },
+        crawlPage: {
+          normalizedUrl: pageUrl,
+        },
+      },
+      orderBy: [{ fetchedAt: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        url: true,
+        rawHtml: true,
+        contentHash: true,
+        etag: true,
+        lastModified: true,
+      },
+    });
+    expect(mocks.documentUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          etag: '"version-1"',
+          lastModified,
+          previousVersionId: null,
+        }),
       }),
     );
     expect(mocks.chunkFindMany).toHaveBeenCalledWith({
@@ -307,6 +361,8 @@ describe("processCrawlJob", () => {
       },
       data: {
         status: CrawlPageStatus.COMPLETED,
+        notModified: false,
+        reusedDocumentId: null,
         error: null,
         failureCategory: null,
         completedAt: expect.any(Date),
@@ -380,6 +436,172 @@ describe("processCrawlJob", () => {
     expect(mocks.refreshCrawlState).toHaveBeenCalledWith(crawlId);
   });
 
+  it("returns the reused Document for an already completed unchanged CrawlPage", async () => {
+    mocks.crawlPageFindUnique.mockResolvedValueOnce({
+      ...crawlPageRecord(CrawlPageStatus.COMPLETED),
+      notModified: true,
+      reusedDocumentId: previousDocumentId,
+      reusedDocument: previousDocument,
+    });
+
+    await expect(processCrawlJob(createJob())).resolves.toEqual({
+      crawlPageId,
+      outcome: "COMPLETED",
+      documentId: previousDocumentId,
+      contentHash: previousDocument.contentHash,
+    });
+    expect(mocks.scrapeStaticPage).not.toHaveBeenCalled();
+  });
+
+  it("sends validators, reuses a 304 Document, and discovers previous links", async () => {
+    mocks.documentFindFirst.mockResolvedValueOnce(previousDocument);
+    mocks.scrapeStaticPage.mockResolvedValueOnce({
+      notModified: true,
+      url: pageUrl,
+      httpStatus: 304,
+      etag: '"version-1"',
+      lastModified,
+      fetchedAt: new Date("2026-07-26T11:00:00.000Z"),
+    });
+    mocks.discoverLinks.mockReturnValueOnce([
+      {
+        url: "https://example.com/child",
+        normalizedUrl: "https://example.com/child",
+      },
+    ]);
+    mocks.reserveDiscoveredPages.mockResolvedValueOnce([
+      {
+        id: childPageId,
+        normalizedUrl: "https://example.com/child",
+      },
+    ]);
+
+    await expect(processCrawlJob(createJob())).resolves.toEqual({
+      crawlPageId,
+      outcome: "COMPLETED",
+      documentId: previousDocumentId,
+      contentHash: previousDocument.contentHash,
+    });
+    expect(mocks.scrapeStaticPage).toHaveBeenCalledWith(
+      pageUrl,
+      "https://example.com",
+      expect.any(Object),
+      2_000,
+      expect.any(Function),
+      {
+        etag: '"version-1"',
+        lastModified,
+      },
+    );
+    expect(mocks.discoverLinks).toHaveBeenCalledWith(
+      previousDocument.rawHtml,
+      previousDocument.url,
+      "https://example.com",
+    );
+    expect(mocks.documentUpsert).not.toHaveBeenCalled();
+    expect(mocks.chunkFindMany).not.toHaveBeenCalled();
+    expect(mocks.crawlPageUpdate).toHaveBeenLastCalledWith({
+      where: {
+        id: crawlPageId,
+      },
+      data: {
+        status: CrawlPageStatus.COMPLETED,
+        notModified: true,
+        reusedDocumentId: previousDocumentId,
+        error: null,
+        failureCategory: null,
+        completedAt: expect.any(Date),
+      },
+    });
+    expect(mocks.queueAdd).toHaveBeenCalledWith(
+      "scrape-static-page",
+      { crawlPageId: childPageId },
+      { jobId: childPageId },
+    );
+  });
+
+  it("reuses the previous Document when a 200 response has the same hash", async () => {
+    mocks.documentFindFirst.mockResolvedValueOnce(previousDocument);
+
+    await expect(processCrawlJob(createJob())).resolves.toMatchObject({
+      outcome: "COMPLETED",
+      documentId: previousDocumentId,
+      contentHash: previousDocument.contentHash,
+    });
+    expect(mocks.documentUpsert).not.toHaveBeenCalled();
+    expect(mocks.chunkFindMany).not.toHaveBeenCalled();
+    expect(mocks.crawlPageUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          notModified: true,
+          reusedDocumentId: previousDocumentId,
+        }),
+      }),
+    );
+  });
+
+  it("creates a linked version and new chunks when static content changes", async () => {
+    const changedContent = "Changed deterministic content";
+    mocks.documentFindFirst.mockResolvedValueOnce(previousDocument);
+    mocks.scrapeStaticPage.mockResolvedValueOnce({
+      notModified: false,
+      url: pageUrl,
+      title: "Changed fixture",
+      rawHtml: `<main>${changedContent}</main>`,
+      content: changedContent,
+      structuredData,
+      etag: '"version-2"',
+      lastModified: "Sat, 26 Jul 2026 11:00:00 GMT",
+      httpStatus: 200,
+      contentType: "text/html",
+      fetchedAt: new Date("2026-07-26T11:00:00.000Z"),
+    });
+
+    const result = await processCrawlJob(createJob());
+
+    expect(result.contentHash).toBe(calculateContentHash(changedContent));
+    expect(result.contentHash).not.toBe(previousDocument.contentHash);
+    expect(mocks.documentUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          previousVersionId: previousDocumentId,
+          etag: '"version-2"',
+          lastModified: "Sat, 26 Jul 2026 11:00:00 GMT",
+        }),
+      }),
+    );
+    expect(mocks.chunkCreateMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          documentId,
+          content: changedContent,
+          contentHash: calculateContentHash(changedContent),
+        }),
+      ],
+    });
+  });
+
+  it("fails permanently when HTTP 304 has no previous Document", async () => {
+    mocks.scrapeStaticPage.mockResolvedValueOnce({
+      notModified: true,
+      url: pageUrl,
+      httpStatus: 304,
+      etag: null,
+      lastModified: null,
+      fetchedAt: new Date("2026-07-26T11:00:00.000Z"),
+    });
+
+    await expect(processCrawlJob(createJob())).rejects.toMatchObject({
+      name: "UnrecoverableError",
+      message: expect.stringContaining(
+        "HTTP 304 without a previous document",
+      ),
+    });
+    expect(mocks.documentUpsert).not.toHaveBeenCalled();
+    expect(mocks.chunkFindMany).not.toHaveBeenCalled();
+    expect(mocks.deadLetterUpsert).toHaveBeenCalledTimes(1);
+  });
+
   it("uses JavaScript rendering while preserving the shared persistence path", async () => {
     mocks.crawlPageFindUnique.mockResolvedValueOnce({
       ...crawlPageRecord(),
@@ -399,6 +621,7 @@ describe("processCrawlJob", () => {
       crawlDelayMs: 2_000,
     });
     expect(mocks.scrapeStaticPage).not.toHaveBeenCalled();
+    expect(mocks.documentFindFirst).not.toHaveBeenCalled();
     expect(mocks.documentUpsert).toHaveBeenCalledTimes(1);
   });
 
