@@ -160,7 +160,7 @@ A crawl starts when a client submits a seed URL, `maxPages`, `maxDepth`, and `re
 A worker claims the job, checks crawl policy, retrieves the page, extracts content and links, persists the result, and reserves eligible child pages. `maxDepth` bounds traversal depth, while `maxPages` provides a deterministic workload ceiling. URLs are normalised and deduplicated before being scheduled, and transactional reservation prevents concurrent workers from exceeding the configured page limit.
 
 > **Screenshot 2 — Dashboard and static crawl:**  ![alt text](./1.png)
->  ![alt text](./2.png)
+>  ![alt text](./6.png)
 
 ### 4.2 Static and JavaScript rendering
 
