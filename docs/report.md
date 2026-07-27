@@ -1,328 +1,685 @@
-# Distributed RAG-Based Web Scraper Framework
+# Distributed RAG Scraper
 
-## Final Project Report
+This repository contains the bounded, polite, fault-tolerant crawler and its
+local multilingual semantic indexing and retrieval pipeline:
 
-| Field | Value |
-|---|---|
-| Assignment | Distributed web scraping and retrieval-augmented generation |
-| Repository | `NourFakih/distributed-rag-scraper` |
-| Author | Nour Fakih |
-| Submission date | July 26, 2026 |
-
----
-
-## Abstract
-
-This project implements a distributed web-crawling and Retrieval-Augmented Generation (RAG) platform using TypeScript, Express, React, BullMQ, Redis, PostgreSQL, Prisma, `pgvector`, Axios, Cheerio, Playwright, multilingual E5 embeddings, and an OpenAI-compatible generation provider. Users can submit bounded crawl jobs, monitor their progress, search indexed content using keyword or semantic retrieval, and ask questions grounded in scraped material with source citations.
-
-The crawler supports static HTML and JavaScript-rendered pages, `robots.txt` checks, shared per-origin rate limiting, retries, exponential backoff, durable dead letters, structured HTML-table extraction, URL and content deduplication, and incremental STATIC recrawling with retained document history. Evaluation included a 500-page Books to Scrape crawl that completed all requested pages without failures, a static-versus-JavaScript comparison on Quotes to Scrape, and a one-worker versus three-worker scaling benchmark. Three workers improved throughput by 7.2%, although globally shared politeness limits restricted the speedup. The project demonstrates the complete crawl-to-RAG workflow; formal retrieval-quality evaluation, multi-host deployment, and verified evidence from a third public website remain limitations.
-
----
-
-## 1. Introduction and Objectives
-
-Modern systems often need to collect information from multiple websites and make it searchable or answerable in natural language. A basic sequential scraper can download pages, but it becomes difficult to manage when crawling must be durable, polite, resumable, fault tolerant, and horizontally scalable. RAG adds another layer: downloaded pages must be cleaned, divided into useful passages, embedded, retrieved, and passed to a language model without losing the source information needed for citations.
-
-This project addresses these requirements through one integrated TypeScript system. A React client submits crawl requests to an Express API. The API validates and stores each request, then places asynchronous work on Redis-backed BullMQ queues. Independent worker processes retrieve pages, respect crawl policies, discover eligible links, and persist documents and chunks in PostgreSQL. An explicit embedding backfill then generates E5 vectors for semantic retrieval. Search and Ask endpoints retrieve relevant passages and return traceable results.
-
-The main objectives were to:
-
-1. provide a typed API for creating and monitoring bounded crawl jobs;
-2. separate request handling from crawl execution through durable queues and independent workers;
-3. support static HTML and JavaScript-rendered pages;
-4. enforce `robots.txt`, page-count, depth, same-origin, and per-origin rate limits;
-5. persist crawls, pages, documents, chunks, structured tables, and version history in PostgreSQL;
-6. support keyword search, semantic search, and cited RAG answers;
-7. expose the workflow through a React dashboard;
-8. evaluate a 500-page crawl, JavaScript rendering, fault handling, and horizontal scaling; and
-9. document limitations honestly rather than treating architectural concurrency as proof of linear scaling.
-
----
-
-## 2. Requirements Coverage
-
-The table below summarises the assignment requirements and the available evidence.
-
-| Requirement | Status | Implementation or evidence |
-|---|---|---|
-| Static HTML crawling | Completed | Axios, Cheerio, and the 500-page Books to Scrape crawl |
-| JavaScript-rendered crawling | Completed | Playwright and the Quotes to Scrape rendering comparison |
-| At least three websites | Evidence required | Saved evidence currently establishes only Books to Scrape and Quotes to Scrape |
-| 500+ page or equivalent crawl | Completed | 500 discovered and 500 completed pages |
-| `robots.txt` and shared politeness | Partially completed | Implemented and tested; site-specific terms-of-service evidence still needs confirmation |
-| Multiple independent workers | Partially completed | Independent worker processes were demonstrated on one host |
-| Horizontal scaling | Completed | One-worker versus three-worker benchmark |
-| Retries, backoff, and dead letters | Completed | Temporary/permanent failure handling and integration tests |
-| Deduplication and incremental recrawling | Completed | URL normalisation, hashes, validators, reuse, and version links |
-| Multiple content types | Completed | Body text and structured HTML tables |
-| Deliberate chunking and vector search | Completed | Overlapping chunks, E5 vectors, and `pgvector` |
-| Keyword and semantic search | Completed | PostgreSQL full-text search and vector similarity |
-| Grounded Ask with citations | Completed | Retrieved evidence, bounded context, and cited responses |
-| Multi-source synthesis | Partially completed | Supported by the Ask context, but no saved cross-site evaluation |
-| Measurable retrieval quality | Not evaluated | No labelled Recall@k, Hit Rate@k, or MRR benchmark |
-| API and web interface | Completed | Express routes and React dashboard |
-| Worker/node crash recovery experiment | Partially completed | Durable queues and idempotent retries exist; physical node-loss recovery was not demonstrated |
-| Multi-host distributed deployment | Not evaluated | Scaling used multiple processes on one host |
-| Architecture and workflow diagrams | Completed | Included below |
-| Narrated project video | Evidence required | To be submitted separately |
-
-
-
----
-
-## 3. Architecture and Technology Choices
-
-### 3.1 System architecture
-
-The repository is a Node.js and TypeScript monorepo. The React application communicates with the Express API. The API validates requests, creates resources, returns status, performs search, and exposes the Ask endpoint. Long crawls are not executed inside HTTP request handlers; they are persisted and sent to BullMQ.
-
-Workers run as independent operating-system processes. Each worker connects to the same Redis and PostgreSQL services. BullMQ provides distributed job ownership and retries, while Redis also coordinates the global per-origin limiter. PostgreSQL is the durable source of truth for crawls, pages, documents, chunks, dead letters, structured tables, validators, and version links. Prisma provides typed access and committed migrations, and `pgvector` stores and searches embeddings.
-
-```mermaid
-flowchart LR
-    User[User] --> Web[React dashboard]
-    Web --> API[Express API]
-    API --> PG[(PostgreSQL + Prisma)]
-    API --> Queue[BullMQ crawl queue]
-    Queue <--> Redis[(Redis)]
-    Redis --> Limiter[Shared per-origin limiter]
-    Queue --> W1[Worker process 1]
-    Queue --> WN[Worker process N]
-    W1 --> Policy[robots.txt and safety checks]
-    WN --> Policy
-    Policy --> Sites[External websites]
-    W1 --> PG
-    WN --> PG
-    PG --> Backfill[Embedding backfill CLI]
-    Backfill --> E5[Multilingual E5]
-    E5 --> Vector[(pgvector)]
-    Vector --> Search[Search and Ask services]
-    Search --> LLM[OpenAI-compatible generator]
-    LLM --> API
+```text
+POST /api/crawls
+  -> PostgreSQL Crawl + root CrawlPage
+  -> Redis/BullMQ CrawlPage job
+  -> independent worker
+  -> cached robots.txt policy
+  -> global Redis request-start limiter
+  -> DNS/IP and redirect validation
+  -> STATIC: safe Axios fetch
+     -> previous-version lookup + conditional HTTP validators
+     or JAVASCRIPT: reusable Playwright Chromium
+  -> shared Cheerio extraction and cleaning
+  -> same-origin link discovery
+  -> bounded child CrawlPage jobs
+  -> normalized content + SHA-256
+  -> new Document version or unchanged Document reuse
+  -> deterministic overlapping Chunk rows per Document
+  -> local multilingual E5 passage embeddings
+  -> PostgreSQL pgvector cosine index
+  -> semantic-search API
+  -> similarity threshold + bounded untrusted source context
+  -> OpenAI-compatible grounded generation
+  -> validated numbered citations
+  -> aggregate crawl/page/document/dead-letter APIs
 ```
 
-> **Screenshot 1 — Architecture and sequence diagrams:** ![alt text](path/to/image.png)
+Each crawl defaults to static rendering, at most 25 pages, and depth 2. The
+React dashboard provides crawl control, semantic and keyword search, and cited
+question answering. Reranking, hybrid search, claim-level verification,
+performance experiments, and the 500-page crawl remain later phases.
 
-### 3.2 End-to-end sequence
+## Extracted content
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant API as Express API
-    participant DB as PostgreSQL
-    participant Q as BullMQ / Redis
-    participant W as Worker
-    participant Site as robots.txt / website
-    participant E5 as Embedding backfill
-    participant V as pgvector
-    participant Ask as Ask service / LLM
+HTML pages retain normalized readable body text and structured table data.
+Extracted tables are stored on each Document as validated JSON, while a bounded,
+readable serialization is appended to indexed content so table values work with
+the existing chunking, semantic search, keyword search, and Ask pipeline. To
+avoid oversized extraction, each page is limited to 20 tables, each table to 200
+rows, each row to 30 cells, and each cell to 1,000 characters. PDF, spreadsheet,
+and image extraction are not supported.
 
-    User->>API: Submit crawl
-    API->>DB: Create Crawl and seed CrawlPage
-    API->>Q: Enqueue page job
-    Q-->>W: Claim job
-    W->>Site: Check robots.txt and acquire origin limit
-    W->>Site: Fetch STATIC HTML or render JavaScript
-    Site-->>W: Page response
-    W->>DB: Store document, structured data, links, and chunks
-    User->>E5: Run embedding backfill
-    E5->>DB: Read missing or stale chunks
-    E5->>V: Store passage vectors
-    User->>Ask: Ask a question
-    Ask->>V: Retrieve ranked chunks
-    V-->>Ask: Passages and source URLs
-    Ask-->>User: Grounded answer with citations
+## Incremental static recrawling
+
+Before a static fetch, the worker looks up the newest Document created for the
+same normalized URL by an earlier CrawlPage. When that Document has an ETag or
+Last-Modified value, the worker sends `If-None-Match` or `If-Modified-Since` on
+the safe same-origin request and its redirects. A `304 Not Modified` response
+reuses the previous Document and chunks, marks the new CrawlPage with
+`notModified: true` and `reusedDocumentId`, and still discovers child links from
+the previous raw HTML so bounded multipage traversal continues.
+
+If a server omits or ignores validators and returns `200`, the worker compares
+the normalized indexed content using its SHA-256 hash. An identical hash uses
+the same reuse path without duplicating Documents or chunks. Changed content
+creates a new Document and chunks, stores the latest ETag and Last-Modified
+values, and links the new version through `previousVersionId`; older versions
+remain addressable by their Document IDs. Conditional requests are currently
+limited to `STATIC` crawls. JavaScript crawls continue to render normally.
+
+To demonstrate reuse, submit the same validator-enabled URL twice in `STATIC`
+mode and wait for both crawls to complete. The second `GET /api/crawls/:id`
+response reports `notModified: true`, its `reusedDocumentId` matches the first
+crawl's `documentId`, and `GET /api/documents/:id` exposes the stored `etag`,
+`lastModified`, and version metadata. Change the served HTML and validator,
+then crawl again; the new Document's `previousVersionId` points to the earlier
+version.
+
+## Horizontal scaling experiment
+
+The scaling harness compares the identical concurrent static workload with one
+independent worker process and then three. Build the repository, review the
+workload, and explicitly start the public crawl benchmark:
+
+```bash
+npm run build
+bash scripts/run-scaling-experiment.sh --help
+bash scripts/run-scaling-experiment.sh
 ```
 
-### 3.3 Technology choices
+By default, each round crawls up to 40 pages from Books to Scrape and 30 pages
+from Quotes to Scrape, with depth 3. Set `SCALING_THIRD_URL` to add an optional
+third origin; its cap and depth default to 30 and 3 and can be changed with
+`SCALING_THIRD_MAX_PAGES` and `SCALING_THIRD_MAX_DEPTH`.
+
+The script requires the existing Compose PostgreSQL and Redis services, but it
+does not stop them or modify the active `distributed_rag` database or Redis DB
+0. Each round recreates only `distributed_rag_scaling`, flushes only Redis DB
+14, applies migrations, and starts a benchmark API on port 3100. This reset
+also prevents incremental document reuse from biasing the three-worker round.
+
+Results are written to `artifacts/scaling-results.md`. Compare completed pages
+per second, duration, speedup, and throughput improvement. Workers share the
+isolated BullMQ queue and PostgreSQL database, while the Redis-backed global
+per-origin limiter and robots.txt rules remain active. Consequently, a small
+speedup can be a valid result when site politeness or network latency—not worker
+capacity—is the bottleneck.
+
+## Stack
+
+- Node.js 24 LTS, TypeScript, npm workspaces, and Turborepo
+- Express API
+- BullMQ and Redis
+- PostgreSQL 16, pgvector 0.8.2, and Prisma 6.19.3
+- Transformers.js 4.2.0 and `intfloat/multilingual-e5-small`
+- Environment-configured OpenAI-compatible chat completions
+- Axios and Cheerio
+- Playwright 1.61.1 with Chromium only
+- React 19, TypeScript, and Vite 8
+- Nginx for the production dashboard and same-origin API proxy
+- Vitest and Supertest
+- Docker Compose in GitHub Codespaces
+- GitHub Actions for quality checks and separate image builds
+
+## Run in GitHub Codespaces
+
+1. Open the repository in a new Codespace. The devcontainer installs npm
+   dependencies and generates Prisma Client.
+2. Configure `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in `.env` when
+   grounded generation should call a live provider, then start the complete
+   stack:
+
+   ```bash
+   docker compose up --build
+   ```
+
+3. Open the dashboard at <http://localhost:4173>. Its Overview section reports
+   API health. Use Crawl to submit or inspect a run, Search to switch between
+   semantic and keyword retrieval, and Ask to request a cited grounded answer.
+
+4. The same operations remain available from a second terminal. Submit a safe
+   static page:
+
+   ```bash
+   curl -i \
+     -H "Content-Type: application/json" \
+     -d '{"url":"https://example.com/","maxPages":5,"maxDepth":1,"renderMode":"STATIC"}' \
+     http://localhost:3000/api/crawls
+   ```
+
+5. Copy the returned Crawl UUID and inspect it:
+
+   ```bash
+   curl http://localhost:3000/api/crawls/COPY_CRAWL_ID_HERE
+   ```
+
+6. Inspect every page in the bounded run:
+
+   ```bash
+   curl "http://localhost:3000/api/crawls/COPY_CRAWL_ID_HERE/pages?page=1&pageSize=25"
+   ```
+
+7. After the status becomes `COMPLETED`, copy a `documentId`:
+
+   ```bash
+   curl http://localhost:3000/api/documents/COPY_DOCUMENT_ID_HERE
+   ```
+
+Stop the stack with `docker compose down`. Named PostgreSQL, Redis, and model
+cache volumes preserve database records, queue state, and model files between
+restarts. Do not use `docker compose down --volumes` when preserving crawler
+or index data matters.
+
+## Develop without local Docker
+
+Local Docker is not required. Run all infrastructure and the live demonstration
+inside Codespaces. Pure unit/API tests can run anywhere with Node 24:
+
+```bash
+npm ci
+npm run prisma:generate
+npm run lint
+npm run build
+npm test
+```
+
+The real PostgreSQL/Redis pipeline test is enabled when its service URLs exist:
+
+```bash
+NODE_ENV=test \
+CRAWLER_ALLOW_PRIVATE_TEST_TARGETS=true \
+RUN_INTEGRATION_TESTS=true \
+npm test
+```
 
-| Component | Selected technology | Alternative considered | Reason for selection |
-|---|---|---|---|
-| Runtime | TypeScript/Node.js | Python | One typed language across React, API, and workers; strong asynchronous I/O support |
-| API | Express | FastAPI or NestJS | Lightweight, explicit middleware and validation, suitable for an assignment-scale API |
-| Queue | BullMQ/Redis | Celery or RabbitMQ | Native TypeScript integration, retries, independent workers, and shared Redis already used for rate limiting |
-| Database | PostgreSQL/Prisma | MongoDB | Transactions, constraints, migrations, JSONB, relational provenance, and vectors in one store |
-| Vector store | `pgvector` | Qdrant, Weaviate, or Pinecone | Keeps embeddings beside chunks and source metadata without another consistency boundary |
-| Static parser | Axios/Cheerio | Browser-only crawling | Faster and less resource-intensive when content is already in HTML |
-| JavaScript renderer | Playwright | Puppeteer or Selenium | Modern browser automation in the same TypeScript stack |
-| Frontend | React/Vite | Server-rendered templates | Interactive crawl polling, search, Ask, and shared TypeScript tooling |
-| Infrastructure | Docker Compose | Kubernetes or managed cloud services | Reproducible local deployment without unnecessary orchestration complexity |
-| Embeddings | Local multilingual E5 | Hosted embedding API | Avoids sending content to an external embedding service and produces fixed 384-dimensional vectors |
+GitHub Actions supplies deterministic PostgreSQL and Redis service containers.
+The test-only private-target switch is rejected outside `NODE_ENV=test`.
+Crawler tests never access a public website: they use committed or local HTTP
+fixtures.
 
----
+Normal tests mock the embedding inference boundary and never download the E5
+model. Service-backed tests additionally require PostgreSQL/pgvector and Redis:
 
-## 4. Distributed Crawling System
+```bash
+RUN_INTEGRATION_TESTS=true npm test
+```
 
-### 4.1 Crawl lifecycle
+The optional real-model smoke test downloads and executes the pinned model:
 
-A crawl starts when a client submits a seed URL, `maxPages`, `maxDepth`, and `renderMode` to `POST /api/crawls`. The API validates the payload, creates the crawl and root page in PostgreSQL, and enqueues the first BullMQ job. Returning immediately prevents a long crawl from keeping an HTTP request open.
+```bash
+npm run test:model
+```
 
-A worker claims the job, checks crawl policy, retrieves the page, extracts content and links, persists the result, and reserves eligible child pages. `maxDepth` bounds traversal depth, while `maxPages` provides a deterministic workload ceiling. URLs are normalised and deduplicated before being scheduled, and transactional reservation prevents concurrent workers from exceeding the configured page limit.
+The optional live generation smoke test requires explicitly supplied LLM
+credentials and is also excluded from normal CI:
 
-> **Screenshot 2 — Dashboard and static crawl:** Show the crawl form and a completed STATIC crawl with seed, limits, status, and counters.
+```bash
+npm run test:llm
+```
 
-### 4.2 Static and JavaScript rendering
+## Web dashboard development
 
-STATIC mode uses Axios and Cheerio. It is the preferred path when meaningful content is present in the server response because it avoids browser startup and consumes fewer resources.
+The frontend lives in `packages/web`. For local Vite development, copy
+`.env.example` to `.env` if needed and leave `VITE_API_BASE_URL` empty to use
+Vite's same-origin proxy to the API on port 3000, then run:
 
-JavaScript mode uses Playwright and Chromium. It is required when the initial HTML is only an application shell and the visible content is inserted after script execution. In the saved Quotes to Scrape comparison, static extraction produced 22 cleaned characters, while JavaScript rendering produced 1,423 characters. This demonstrates why both modes are necessary.
-
-> **Screenshot 3 — JavaScript crawl:** Show the Quotes to Scrape JavaScript-mode crawl and the rendered document result.
-
-### 4.3 Politeness, safety, and ethics
-
-Before fetching a page, the worker checks `robots.txt` and acquires permission from a Redis-backed per-origin limiter. Because the limiter is shared across all workers, increasing the number of workers does not multiply the request rate to a single site. This preserves responsible crawling but limits the maximum speedup for single-origin workloads.
-
-The HTTP layer also validates redirects, DNS results, private-IP targets, response sizes, content types, and same-origin behaviour. Unsupported or unsafe targets are rejected instead of being repeatedly retried. The implementation documents responsible crawl controls, while site-specific terms-of-service evidence must still be confirmed for the final submission.
-
-### 4.4 Fault tolerance
-
-Retryable failures—including throttling, temporary server errors, network failures, and browser timeouts—use BullMQ retries with `Retry-After` support or bounded exponential backoff. Permanent problems such as unsafe targets, invalid redirects, unsupported content, or oversized responses are not repeatedly retried.
-
-After retry exhaustion, the worker stores one durable dead-letter record in PostgreSQL. The record includes the page, crawl, job, failure category, bounded error information, attempt count, and failure time. Idempotent redelivery prevents duplicate terminal records. Integration tests verified HTTP 503 retry exhaustion, permanent unsupported-content handling, and idempotent redelivery.
-
-> **Screenshot 4 — Dead-letter and CI evidence:** Show an HTTP 503/dead-letter result together with a successful GitHub Actions run.
-
-### 4.5 Structured content extraction
-
-The processing stage handles body text and HTML tables. Cheerio extracts up to 20 top-level tables per page. Each table may retain a caption, headers, and rows, with limits of 200 rows, 30 cells per row, and 1,000 characters per cell. Zod validates the resulting JSON before persistence.
-
-Structured tables are stored in `Document.structuredData`. A readable table representation is also appended to the cleaned text so keyword search, semantic search, and RAG can retrieve values contained in table cells.
-
-### 4.6 Incremental STATIC recrawling
-
-For repeated STATIC crawls, the worker retrieves the newest previous document for the same normalised URL. Stored ETag and Last-Modified values are sent through `If-None-Match` and `If-Modified-Since`.
-
-An HTTP 304 response reuses the earlier document and chunks. If a server returns HTTP 200 but the SHA-256 content hash is unchanged, the previous document is also reused. The new crawl page is marked with `notModified` and `reusedDocumentId`. When content changes, a new document is created with `previousVersionId` pointing to the previous version, so history is retained instead of overwritten. Conditional recrawling is currently limited to STATIC mode.
-
-> **Screenshot 5 — Structured tables and incremental reuse:** Combine a `structuredData` example with API or SQL evidence showing `notModified`, `reusedDocumentId`, or a version chain.
-
----
-
-## 5. Processing, Search, and RAG
-
-### 5.1 Cleaning and chunking
-
-Raw HTML contains scripts, styles, navigation, and repeated page elements that are unsuitable for retrieval. The processing pipeline removes unnecessary markup, normalises whitespace, stores source metadata, and creates chunks during document persistence.
-
-The chunker targets 1,000 characters with a 150-character overlap. It prefers paragraph, line, or whitespace boundaries and records offsets and SHA-256 hashes. This is an overlap-based strategy rather than semantic topic segmentation: it preserves local context across boundaries but creates some repeated text.
-
-### 5.2 Embeddings and vector indexing
-
-Embeddings are not generated automatically during crawling. After chunks exist, an operator runs the embedding backfill CLI. It processes missing or stale chunks in deterministic batches, generates multilingual E5 passage vectors, and stores model metadata, content hashes, and normalised 384-dimensional embeddings.
-
-`pgvector` stores the vectors and uses a cosine HNSW index. Semantic search embeds the query, filters out missing or stale vectors, and returns ranked chunks with source metadata. Newly crawled chunks are not semantically searchable until the backfill completes. Keyword mode remains available through PostgreSQL full-text search without embeddings.
-
-### 5.3 Grounded question answering
-
-The Ask path embeds the user question, retrieves relevant chunks, builds bounded grounding context, and sends that evidence to an OpenAI-compatible generation provider. The response includes citations linked to the retrieved source URLs. Citation markers are validated, and the system can return an insufficient-evidence response rather than generating an unsupported answer.
-
-A manual demonstration returned ranked sports-book results and a cited answer identifying *The Book of Basketball* at £44.84 and in stock. This is qualitative evidence of integration, not a formal retrieval-quality benchmark. No labelled Recall@k, Hit Rate@k, or MRR evaluation was completed.
-
-> **Screenshot 6 — Semantic search and grounded Ask:** Place the ranked semantic results and the cited Ask answer side by side.
-
----
-
-## 6. API and Web Interface
-
-The Express API provides the following implemented routes:
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/health` | Return API health |
-| `POST` | `/api/crawls` | Create and enqueue a crawl |
-| `GET` | `/api/crawls/:id` | Return crawl status, limits, and counters |
-| `GET` | `/api/crawls/:id/pages` | Return paginated crawl pages |
-| `GET` | `/api/crawls/:id/dead-letters` | Return crawl dead letters |
-| `GET` | `/api/dead-letters/:id` | Return one dead-letter record |
-| `GET` | `/api/documents/:id` | Return raw, cleaned, structured, and version metadata |
-| `GET` | `/api/search` | Run keyword or semantic search |
-| `POST` | `/api/ask` | Return a grounded answer with cited sources |
-
-The React dashboard connects to these routes and allows users to submit crawls, monitor progress, inspect pages, perform keyword and semantic search, and ask grounded questions. The interface separates asynchronous crawl submission from status polling and retrieval.
-
-> **Screenshot 7 — Full dashboard:** Show crawl submission, status, search, and Ask navigation in one interface.
-
----
-
-## 7. Security, Testing, and Reproducibility
-
-Configuration is supplied through environment variables, and credentials are not stored in the report. Docker Compose runs the API, web client, workers, Redis, PostgreSQL, and migrations. GitHub Actions validates repository changes, while committed Prisma migrations keep database structure reproducible.
-
-The standard validation recorded 209 passing tests, with 22 explicitly gated environment-dependent tests skipped. Tests cover URL handling, validation, parsing, link discovery, retries, dead letters, static and JavaScript rendering, politeness, chunking, backfills, search, Ask, and the React dashboard.
-
-The scaling benchmark was designed not to damage active data. It recreated only the temporary database `distributed_rag_scaling`, flushed only Redis logical database 14, and started process-scoped API and worker instances. The active database and Redis data remained untouched.
-
----
-
-## 8. Evaluation and Results
-
-### 8.1 Five-hundred-page crawl
-
-The Books to Scrape STATIC crawl used `maxPages: 500` and `maxDepth: 4`. According to the saved evidence, it discovered and completed all 500 pages, with zero skipped and zero failed pages, in 500.018 seconds. This validates bounded pagination, URL deduplication, concurrent discovery, and consistent crawl counters.
-
-### 8.2 Rendering comparison
-
-For `https://quotes.toscrape.com/js/`, static extraction produced 22 cleaned characters, while Playwright rendering produced 1,423. Because the target and objective were identical, the difference directly demonstrates content that was unavailable in the initial HTML response.
-
-### 8.3 Horizontal scaling
-
-The same concurrent two-origin workload was executed with one worker and then three independent workers. Each round started from an isolated empty PostgreSQL database and Redis logical database, preventing incremental recrawling from biasing the second result.
-
-| Workers | Crawls | Discovered | Completed | Failed | Duration | Pages/second |
-|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 2 | 70 | 64 | 6 | 59.982 s | 1.067 |
-| 3 | 2 | 70 | 64 | 6 | 55.933 s | 1.144 |
-
-The three-worker round achieved a 1.072× speedup and a 7.2% throughput improvement. Both rounds completed the same number of pages and had the same six failures, supporting workload equivalence. The improvement was modest because all workers shared per-origin politeness limits and the experiment depended on public-site latency and crawl topology.
-
-### 8.4 Retrieval evaluation
-
-Keyword search, semantic search, insufficient-evidence handling, and cited Ask responses were demonstrated qualitatively. However, no labelled dataset was used to calculate Recall@k, Hit Rate@k, MRR, citation precision, or answer correctness. The project therefore claims functional retrieval and grounding, not measured RAG accuracy.
-
-> **Screenshot 8 — Evaluation results:** Combine the 500-page crawl and the scaling-results table. Add a small caption noting that retrieval evidence is qualitative.
-
----
-
-## 9. Limitations and Future Work
-
-The saved public-site evidence currently covers only Books to Scrape and Quotes to Scrape. A third verified website must be added to satisfy the assignment requirement fully. These websites are also intentionally scraper-friendly and do not represent authentication, anti-bot systems, complex sitemaps, or highly irregular production pages.
-
-The scaling experiment used several independent processes on one host. It demonstrates BullMQ coordination and horizontal process scaling but not deployment across multiple machines or availability zones. Shared CPU, memory, network, and database resources remained common to all workers.
-
-Retrieval evaluation was qualitative. A stronger study should define labelled questions and expected passages, then measure Recall@k, Hit Rate@k, MRR, answer correctness, citation precision, and citation completeness. Multi-source synthesis should also be evaluated using questions that require evidence from more than one website.
-
-Future work includes:
-
-- adding a verified third website;
-- extending conditional and hash-aware recrawling to JavaScript mode;
-- scheduling automatic recrawls and embedding backfills;
-- supporting broader content types such as linked documents and PDFs;
-- repeating scaling experiments across several hosts and more origins;
-- adding authentication, authorisation, quotas, TLS, and secret management;
-- adding tracing, metrics, queue dashboards, alerts, and dead-letter workflows; and
-- building a labelled retrieval and citation-evaluation benchmark.
-
----
-
-## 10. Conclusion
-
-This project delivers an end-to-end distributed crawler and RAG platform. It supports static and JavaScript-rendered pages, bounded multi-page crawling, shared politeness controls, retries and durable dead letters, structured table extraction, incremental STATIC recrawling, keyword and semantic search, and cited question answering.
-
-The system completed a 500-page crawl without skipped or failed pages, recovered substantially more content through JavaScript rendering on a dynamic page, and achieved a measured 7.2% throughput improvement with three independent workers. The result was intentionally limited by responsible per-origin rate limiting.
-
-The project is a strong assignment-scale demonstration rather than a complete production platform. Its remaining gaps—third-site evidence, labelled retrieval evaluation, multi-host deployment, automatic embedding scheduling, and broader production security—are clearly identified and provide a practical direction for future work.
-
----
-
-## Screenshot Checklist
-
-- [ ] Screenshot 1 — Architecture and sequence diagrams
-- [ ] Screenshot 2 — Dashboard and completed STATIC crawl
-- [ ] Screenshot 3 — JavaScript crawl
-- [ ] Screenshot 4 — Dead letter and successful CI
-- [ ] Screenshot 5 — Structured table and incremental reuse
-- [ ] Screenshot 6 — Semantic search and grounded Ask
-- [ ] Screenshot 7 — Full dashboard
-- [ ] Screenshot 8 — 500-page crawl and scaling results
-- [ ] Third website result and screenshot
+```bash
+npm run dev --workspace @distributed-rag/web
+```
+
+Open <http://localhost:5173>. If the frontend is hosted separately behind a
+CORS-capable API deployment, set `VITE_API_BASE_URL` to that API origin before
+building. When the variable is absent entirely, the typed client defaults to
+`http://localhost:3000`; the committed empty value is recommended for local
+Vite and Compose because both provide an API proxy.
+
+The production dashboard is built and served by the `web` Compose service on
+<http://localhost:4173>. Its Nginx configuration proxies `/api` and `/health`
+to the existing API container, so no backend CORS change is required.
+
+Basic workflow:
+
+1. Submit a bounded crawl and wait for a terminal status.
+2. Search completed documents using semantic or keyword mode.
+3. Ask a question; configure an LLM provider first for grounded generation.
+   Insufficient retrieval evidence is displayed without calling the provider.
+
+## API contract
+
+### `POST /api/crawls`
+
+Strict JSON body:
+
+```json
+{
+  "url": "https://example.com/docs/",
+  "maxPages": 25,
+  "maxDepth": 2,
+  "renderMode": "STATIC"
+}
+```
+
+The URL must be absolute HTTP/HTTPS, may not contain credentials, and is limited
+to 2,048 characters. URL fragments are removed and common downloadable
+extensions are rejected. `maxPages` accepts 1–500 and `maxDepth` accepts 0–10;
+`renderMode` accepts `STATIC` or `JAVASCRIPT`. Omitting optional fields preserves
+the basic request and applies defaults of 25, 2, and `STATIC`. The endpoint
+returns `202 Accepted` after the Crawl, root CrawlPage, and BullMQ job exist. If
+root queueing fails, it marks the run failed and returns `503`.
+
+### `GET /api/crawls/:id`
+
+Returns the aggregate run status, render mode, limits, counters, root
+page/document information, timestamps, and whether completion included
+child-page failures. An unchanged recrawl also returns `notModified` and
+`reusedDocumentId`. Invalid UUIDs return `422`; unknown UUIDs return `404`.
+
+### `GET /api/crawls/:id/pages`
+
+Returns CrawlPage metadata without raw HTML. `page` defaults to 1 and `pageSize`
+defaults to 25 with a maximum of 100. Each result includes depth, parent,
+status, attempts, bounded error, timestamps, and optional `documentId`.
+Unchanged pages include `notModified: true` and the reused Document ID.
+
+### `GET /api/crawls/:id/dead-letters`
+
+Returns terminal technical failures for one Crawl with the original bounded job
+payload, failure category, bounded error message, attempt count, and failure
+time. It uses the same `page` and `pageSize` pagination as the page list.
+Robots exclusions do not create dead letters.
+
+### `GET /api/dead-letters/:id`
+
+Returns one inspectable dead letter. Replay is intentionally not part of this
+stage.
+
+### `GET /api/documents/:id`
+
+Returns the owning Crawl/CrawlPage IDs, source URL, title, raw HTML, normalized
+content, structured HTML tables, lowercase SHA-256, HTTP metadata, and
+timestamps. Version metadata includes `etag`, `lastModified`, and
+`previousVersionId`. Invalid UUIDs return `422`; unknown UUIDs return `404`.
+
+### `GET /api/search`
+
+`q` is required, trimmed, non-empty, and limited to 512 characters. `limit`
+defaults to 5 and accepts integers from 1 through 20. `mode` accepts
+`semantic` or `keyword` and defaults to `semantic`, preserving the original
+behavior:
+
+```bash
+curl --get http://localhost:3000/api/search \
+  --data-urlencode "q=How does the crawler respect robots.txt?" \
+  --data-urlencode "mode=semantic" \
+  --data-urlencode "limit=5"
+```
+
+Example response:
+
+```json
+{
+  "data": {
+    "query": "How does the crawler respect robots.txt?",
+    "mode": "semantic",
+    "activeEmbeddingModel": {
+      "id": "intfloat/multilingual-e5-small",
+      "version": "hf:614241f622f53c4eeff9890bdc4f31cfecc418b3|transformers.js:4.2.0|fp32|mean|l2:v1",
+      "dimension": 384
+    },
+    "resultCount": 1,
+    "results": [
+      {
+        "chunkId": "CHUNK_UUID",
+        "documentId": "DOCUMENT_UUID",
+        "url": "https://example.com/guide",
+        "title": "Crawler guide",
+        "chunkIndex": 2,
+        "excerpt": "The worker checks robots.txt before fetching...",
+        "similarity": 0.91
+      }
+    ]
+  }
+}
+```
+
+The API never returns raw vectors. An empty or not-yet-embedded index is not an
+error: it returns HTTP 200, `resultCount: 0`, and `results: []`.
+
+Keyword mode does not load the embedding model. It uses parameterized
+PostgreSQL full-text search with the `simple` configuration across weighted
+Document titles, Chunk content, and source URLs. Results are ordered by
+relevance descending and Chunk UUID ascending:
+
+```bash
+curl --get http://localhost:3000/api/search \
+  --data-urlencode "q=book price" \
+  --data-urlencode "mode=keyword" \
+  --data-urlencode "limit=5"
+```
+
+Keyword results contain the same source and excerpt fields as semantic
+results, with a numeric `relevance` score instead of cosine `similarity`.
+
+### `POST /api/ask`
+
+The endpoint trims a required question of at most 2,000 characters. `limit`
+defaults to 5 and accepts integers from 1 through 10:
+
+```bash
+curl -X POST http://localhost:3000/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What information does the indexed site provide about book prices?","limit":5}'
+```
+
+It calls the existing semantic-search service with the question, filters
+results below `RAG_MIN_SIMILARITY`, builds bounded numbered sources, and then
+calls the configured generator. A successful response is:
+
+```json
+{
+  "question": "What information does the indexed site provide about book prices?",
+  "answer": "The indexed listing displays book prices beside each title [1].",
+  "grounded": true,
+  "model": {
+    "provider": "openai-compatible",
+    "model": "configured-model-name"
+  },
+  "retrieval": {
+    "requestedLimit": 5,
+    "resultCount": 1
+  },
+  "citations": [
+    {
+      "number": 1,
+      "chunkId": "CHUNK_UUID",
+      "documentId": "DOCUMENT_UUID",
+      "chunkIndex": 0,
+      "url": "https://example.com/books",
+      "title": "Books",
+      "excerpt": "The displayed book price is $10.",
+      "similarity": 0.91
+    }
+  ]
+}
+```
+
+If no result survives the evidence threshold, the LLM is not called and the
+endpoint returns HTTP 200:
+
+```json
+{
+  "question": "What is the company's 2035 revenue forecast?",
+  "answer": "I could not find enough relevant information in the indexed documents to answer this question.",
+  "grounded": false,
+  "model": null,
+  "retrieval": {
+    "requestedLimit": 5,
+    "resultCount": 0
+  },
+  "citations": []
+}
+```
+
+Missing LLM configuration returns controlled HTTP 503 only when usable
+evidence requires generation. Provider timeouts return 504, while provider
+HTTP errors, malformed responses, empty answers, and uncited answers return
+502. API keys, provider bodies, internal prompts, and vectors are never
+returned.
+
+## Grounded generation configuration
+
+The API container alone receives these settings:
+
+```env
+LLM_BASE_URL=https://provider.example/v1
+LLM_API_KEY=
+LLM_MODEL=configured-model-name
+LLM_TIMEOUT_MS=60000
+LLM_MAX_OUTPUT_TOKENS=500
+RAG_MIN_SIMILARITY=0.75
+RAG_MAX_SOURCE_CHARACTERS=1500
+RAG_MAX_CONTEXT_CHARACTERS=8000
+```
+
+`LLM_BASE_URL` is the base before `/chat/completions`. The provider is created
+on the first grounded request and reused in that API process. Requests use
+temperature `0.1`, bounded output tokens, no streaming, no tools, no history,
+and no automatic retry.
+
+The conservative default evidence threshold is `0.75` and may be tuned from
+`-1` through `1` during evaluation. Each retrieved excerpt and the serialized
+source context are bounded independently. Retrieval order is preserved and
+accepted sources receive stable `[1]`, `[2]`, and subsequent numbers.
+
+Model-produced citations are not trusted blindly. Out-of-range numeric markers
+are removed; valid numbers are normalized and deduplicated for the structured
+citations array in their first-appearance order. Only cited sources are
+returned. An answer with no valid citation is rejected rather than presented
+as grounded.
+
+## Document chunking
+
+Every successfully persisted Document is split deterministically by the worker
+into chunks targeting approximately 1,000 characters with approximately 150
+characters of overlap. The splitter prefers paragraph, line, and whitespace
+boundaries. Chunk offsets use inclusive starts and exclusive ends, so
+`document.content.slice(startOffset, endOffset)` reproduces the stored chunk
+exactly. Each chunk stores its own lowercase SHA-256 content hash.
+
+Document upsert, stale-chunk deletion, and replacement-chunk insertion share
+one PostgreSQL transaction. The unique `(documentId, chunkIndex)` key prevents
+duplicate positions, and deleting a Document cascades to its chunks. The same
+synchronizer is used by live crawl processing and the backfill. Unchanged rows
+retain valid embeddings; changed content transactionally replaces stale chunks,
+whose new rows begin without embeddings.
+
+After starting the Compose stack and completing a crawl, inspect chunk counts:
+
+```bash
+docker compose exec postgres \
+  psql -U postgres -d distributed_rag \
+  -c 'SELECT document_id, COUNT(*) AS chunks FROM chunks GROUP BY document_id ORDER BY document_id;'
+```
+
+Inspect one document's ordered chunks:
+
+```bash
+docker compose exec postgres \
+  psql -U postgres -d distributed_rag \
+  -c "SELECT chunk_index, start_offset, end_offset, content_hash FROM chunks WHERE document_id = 'COPY_DOCUMENT_ID_HERE' ORDER BY chunk_index;"
+```
+
+Backfill Documents created before chunking was introduced:
+
+```bash
+npm run chunks:backfill -- --batch-size 25 --limit 500
+```
+
+With the Compose runtime, invoke the already-built worker command:
+
+```bash
+docker compose run --rm worker \
+  node packages/workers/dist/src/cli/chunks-backfill.js \
+  --batch-size 25 --limit 500
+```
+
+Both flags require positive integers. `--batch-size` defaults to 25 and is
+bounded at 500; `--limit` is optional. Cursor pagination, per-Document
+transactions, and error isolation make the command safe to stop and rerun. Its
+summary reports inspected, processed, skipped, and failed Documents plus
+created, retained, and replaced chunks.
+
+## Local embeddings and pgvector
+
+The committed migration enables the `vector` extension and adds nullable
+`vector(384)` storage plus model, model-version, embedded-content-hash, and
+timestamp metadata to each Chunk. Existing Documents and Chunks remain in
+place and initially have no embedding. A partial HNSW index with
+`vector_cosine_ops` indexes only non-null vectors. HNSW keeps retrieval
+practical as the index grows; it is approximate, while the final SQL ordering
+is deterministic by cosine similarity descending and Chunk UUID ascending.
+
+The pinned model is
+[`intfloat/multilingual-e5-small`](https://huggingface.co/intfloat/multilingual-e5-small)
+at revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`, executed locally through
+Transformers.js 4.2.0. It produces 384-dimensional embeddings. The provider
+adds `passage: ` to chunks and `query: ` to searches, removes an existing E5
+prefix before applying the correct one, mean-pools, L2-normalizes, and verifies
+dimension, finiteness, and unit magnitude before a vector can be stored or
+queried.
+
+An embedding is current only when all of these match:
+
+- a vector exists;
+- `embedding_model` is the active model ID;
+- `embedding_version` is the pinned model revision, inference library,
+  precision, pooling, normalization, and provider-contract version;
+- `embedded_content_hash` equals the Chunk's current `content_hash`.
+
+Backfill missing or stale embeddings:
+
+```bash
+npm run embeddings:backfill -- --batch-size 16 --limit 100
+```
+
+Or use the worker image and shared Compose model cache:
+
+```bash
+docker compose run --rm worker \
+  node packages/workers/dist/src/cli/embeddings-backfill.js \
+  --batch-size 16 --limit 100
+```
+
+The CLI uses cursor pagination, bounded inference batches, three bounded
+attempts, a per-Chunk fallback after a failed batch, and a content-hash
+condition on update. It never overwrites a newer Chunk after concurrent
+content change and is safe to resume. The final summary includes inspected,
+embedded, skipped, and failed Chunks, completed batches, and elapsed time.
+
+`MODEL_CACHE_DIR` is explicit. Compose mounts the persistent `model-cache`
+volume at `/models/cache` into both API and worker containers, so query and
+backfill processes reuse downloaded files. `EMBEDDING_BATCH_SIZE` defaults to
+16 (maximum 64), and `EMBEDDING_ALLOW_REMOTE_MODELS=false` forces cache-only
+startup. The API loads the model only on the first semantic query; crawler-only
+worker operation does not initialize it.
+
+The pinned fp32 ONNX weights are about 470 MB, and tokenizer/config files bring
+the first download to roughly 493 MB. Budget approximately 0.7-1.2 GB of
+runtime memory per process that actually loads the model, depending on the
+platform and batch size. First use includes download plus model initialization
+and can take tens of seconds; later starts reuse the volume but still pay model
+initialization time. The 512-token E5 input limit means very long character
+chunks may be token-truncated; the current approximately 1,000-character
+chunker reduces but does not eliminate that risk.
+
+Apply and verify the pgvector migration in Codespaces:
+
+```bash
+docker compose up -d postgres redis
+docker compose run --rm migrate
+docker compose exec postgres \
+  psql -U postgres -d distributed_rag -tAc \
+  "SELECT extversion FROM pg_extension WHERE extname = 'vector';"
+```
+
+The Compose PostgreSQL service uses
+`pgvector/pgvector:0.8.2-pg16-bookworm` and retains the existing
+`postgres-data` volume and database settings.
+
+## Worker guarantees
+
+- The API and worker are separate deployable processes and containers.
+- One render mode is stored on the Crawl and applies to every page in that run.
+- Each job operates on a CrawlPage UUID and uses that UUID as `jobId`.
+- A job gets three attempts. Retryable HTTP, network, rate-limiter, and robots
+  failures honor a valid `Retry-After` value, then use bounded exponential
+  backoff.
+- Page state changes through `DISCOVERED`, `QUEUED`, `PROCESSING`, optionally
+  `RETRYING`, and then a terminal state. Robots exclusions use
+  `SKIPPED_ROBOTS`.
+- A unique `crawlPageId` on Document plus an upsert makes redelivery idempotent.
+- Document writes atomically replace their deterministic chunks, and the
+  unique `(documentId, chunkIndex)` key prevents duplicate chunks.
+- A unique `crawlPageId` on DeadLetter plus an upsert makes terminal-failure
+  redelivery idempotent.
+- The unique `(crawlId, normalizedUrl)` database key prevents duplicate pages.
+- Discovery locks the Crawl row while checking remaining capacity, so
+  concurrent workers cannot exceed `maxPages`.
+- The aggregate Crawl becomes `COMPLETED` only after no page remains active,
+  and its counters distinguish policy skips from technical failures.
+- Terminally failed BullMQ jobs remain inspectable.
+
+Before each page fetch, workers share a per-origin robots policy cached in Redis
+for at most 24 hours. A 2xx robots response is enforced, 4xx means allow, and
+5xx/network failures fail closed and retry. The configured user agent is used
+for both robots matching and page requests. Robots `Crawl-delay` can only
+increase the global delay.
+
+The global Redis limiter atomically spaces request starts by hostname and
+effective port across all workers. `CRAWLER_DEFAULT_INTERVAL_MS` defaults to
+1000 and must be an integer from 1 through 60000. Robots fetches, page fetches,
+and every redirect hop use the limiter.
+
+Static fetching has a 15-second timeout, a five-redirect limit, and a 2 MiB
+limit, and requires a successful HTML/XHTML response. Redirects are manual:
+every hop remains on the exact seed origin, passes DNS/IP validation, observes
+robots policy, and is rate-limited. Cleaning removes executable, navigation,
+page-chrome, and embedded-media elements; it prefers `main`, then `article`,
+then `body`. Link extraction uses the raw HTML and final response URL, honors
+valid same-origin `<base>` values and `nofollow`, and excludes external,
+non-HTTP, malformed, empty, duplicate, and downloadable links.
+
+JavaScript rendering launches one lazy Chromium instance per worker process and
+reuses it across isolated page contexts. Two contexts may run concurrently by
+default. Each navigation waits for `DOMContentLoaded`, an optional configured
+selector, and a bounded settling delay. Pages and contexts close in `finally`,
+and worker shutdown closes Chromium. Popups, downloads, non-HTTP requests,
+unsafe DNS targets, external top-level navigation, and navigation beyond five
+hops are blocked. Browser timeouts and crashes enter the existing retry and
+dead-letter pipeline.
+
+Renderer settings:
+
+- `CRAWLER_JAVASCRIPT_NAVIGATION_TIMEOUT_MS` defaults to `15000`.
+- `CRAWLER_JAVASCRIPT_SETTLE_MS` defaults to `500`.
+- `CRAWLER_JAVASCRIPT_WAIT_SELECTOR` is optional and applies to every
+  JavaScript-mode page.
+- `CRAWLER_JAVASCRIPT_WAIT_SELECTOR_TIMEOUT_MS` defaults to `5000`.
+- `CRAWLER_JAVASCRIPT_MAX_CONTEXTS` defaults to `2`.
+
+## Security boundary
+
+This remains a private Codespaces demonstration rather than a public crawling
+service. Static mode resolves DNS before each hop, rejects private, loopback,
+link-local, multicast, documentation, and other non-public targets, pins the
+validated addresses into the Axios request, disables proxy discovery, and
+repeats the checks after redirects.
+
+JavaScript mode performs the same URL and DNS/IP checks before navigation and
+for intercepted browser requests, but Chromium performs its own connection-time
+DNS resolution. Playwright does not expose an equivalent to the Axios pinned
+lookup used by static mode, so a DNS result can theoretically change between
+validation and Chromium’s connection. JavaScript mode therefore does not claim
+the same DNS-rebinding resistance as static mode and must remain private and
+isolated. These controls do not replace authentication, authorization, abuse
+controls, or a production security review.
+
+Retrieved webpage text is untrusted and may contain prompt-injection attempts.
+It is placed only in numbered user-context blocks, while the system instruction
+explicitly forbids following source commands. This separation reduces risk but
+cannot guarantee that every model will ignore every adversarial source.
+Answers are limited to indexed sources, and citations identify the retrieved
+Chunks used by the model; they are not independent verification that every
+claim is true. The project does not yet include reranking, hybrid retrieval, or
+full claim-level citation verification.
+
+## Repository layout
+
+```text
+packages/
+  api/       Express routes, semantic retrieval, grounded generation, and tests
+  shared/    Prisma, Redis queue, URL contracts, and local embedding provider
+  workers/   crawling, rendering, chunk synchronization, backfills, and tests
+  web/       React/Vite dashboard, typed API client, Nginx image, and UI tests
+prisma/      schema and committed migration
+.devcontainer/
+.github/workflows/
+docker-compose.yml
+```
+
+The original assignment is preserved unchanged in `rag_assignment.txt`.
