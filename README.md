@@ -10,7 +10,8 @@
 | Submission date | July 26, 2026 |
 
 ---
-
+## Recorded Video: https://youtu.be/jxSkXHcBBIE 
+---
 ## Abstract
 
 This project implements a distributed web-crawling and Retrieval-Augmented Generation (RAG) platform using TypeScript, Express, React, BullMQ, Redis, PostgreSQL, Prisma, `pgvector`, Axios, Cheerio, Playwright, multilingual E5 embeddings, and an OpenAI-compatible generation provider. Users can submit bounded crawl jobs, monitor their progress, search indexed content using keyword or semantic retrieval, and ask questions grounded in scraped material with source citations.
