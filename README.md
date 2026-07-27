@@ -316,15 +316,3 @@ The system completed a 500-page crawl without skipped or failed pages, recovered
 The project is a strong assignment-scale demonstration rather than a complete production platform. Its remaining gaps—third-site evidence, labelled retrieval evaluation, multi-host deployment, automatic embedding scheduling, and broader production security—are clearly identified and provide a practical direction for future work.
 
 ---
-
-## Screenshot Checklist
-
-- [ ] Screenshot 1 — Architecture and sequence diagrams
-- [ ] Screenshot 2 — Dashboard and completed STATIC crawl
-- [ ] Screenshot 3 — JavaScript crawl
-- [ ] Screenshot 4 — Dead letter and successful CI
-- [ ] Screenshot 5 — Structured table and incremental reuse
-- [ ] Screenshot 6 — Semantic search and grounded Ask
-- [ ] Screenshot 7 — Full dashboard
-- [ ] Screenshot 8 — 500-page crawl and scaling results
-- [ ] Third website result and screenshot
